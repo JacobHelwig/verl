@@ -1,4 +1,5 @@
 set -x
+which python
 ENGINE=${1:-vllm}
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # For megatron communication/computation overlapping
 
@@ -12,30 +13,36 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1 # For megatron communication/computation ov
 
 export VLLM_ALLREDUCE_USE_SYMM_MEM=0 # for vllm0.11.0 with TP
 
+export CUDA_VISIBLE_DEVICES=8,9
+export NCCL_P2P_DISABLE=1
 
-HF_MODEL_PATH=${HF_MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen3-VL-8B-Instruct"}
+DATA_PATH=$HOME/verlData
+export HF_HOME=$DATA_PATH
+export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
+HF_MODEL_PATH=Qwen/Qwen3-VL-8B-Instruct
 
-GEN_TP=${GEN_TP:-4}
-CP=${CP:-2}
-TP=${TP:-2}
-PP=${PP:-2}
+GEN_TP=${GEN_TP:-1}
+CP=${CP:-1}
+TP=${TP:-1}
+PP=${PP:-1}
 
-train_path=$HOME/data/geo3k/train.parquet
-test_path=$HOME/data/geo3k/test.parquet
 
-python3 -m verl.trainer.main_ppo --config-path=config \
+train_path=$DATA_PATH/geo3k/train.parquet
+test_path=$DATA_PATH/geo3k/test.parquet
+
+python -m verl.trainer.main_ppo --config-path=config \
     --config-name='ppo_megatron_trainer.yaml'\
     algorithm.adv_estimator=grpo \
     data.train_files="$train_path" \
     data.val_files="$test_path" \
-    data.train_batch_size=512 \
+    data.train_batch_size=2 \
     data.max_prompt_length=1024 \
     data.max_response_length=2048 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
     actor_rollout_ref.model.path=$HF_MODEL_PATH \
     actor_rollout_ref.actor.optim.lr=1e-6 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=128 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=2 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=$PP \
     actor_rollout_ref.actor.megatron.tensor_model_parallel_size=$TP \
@@ -61,7 +68,9 @@ python3 -m verl.trainer.main_ppo --config-path=config \
     actor_rollout_ref.actor.megatron.param_offload=True \
     actor_rollout_ref.actor.megatron.optimizer_offload=True \
     actor_rollout_ref.actor.megatron.grad_offload=True \
+    actor_rollout_ref.actor.megatron.sequence_parallel=False \
     actor_rollout_ref.ref.megatron.param_offload=True \
+    actor_rollout_ref.ref.megatron.sequence_parallel=False \
     +actor_rollout_ref.actor.optim.override_optimizer_config.optimizer_offload_fraction=1 \
     +actor_rollout_ref.actor.optim.override_optimizer_config.overlap_cpu_optimizer_d2h_h2d=True \
     +actor_rollout_ref.actor.optim.override_optimizer_config.use_precision_aware_optimizer=True \
@@ -76,10 +85,10 @@ python3 -m verl.trainer.main_ppo --config-path=config \
     +actor_rollout_ref.actor.megatron.override_transformer_config.moe_permute_fusion=True \
     algorithm.use_kl_in_reward=False \
     trainer.critic_warmup=0 \
-    trainer.logger='["console","wandb"]' \
+    trainer.logger='["console"]' \
     trainer.project_name='verl_grpo_example_geo3k' \
     trainer.experiment_name='qwen3_vl_8b_megatron' \
-    trainer.n_gpus_per_node=8 \
+    trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
     trainer.save_freq=20 \
     trainer.test_freq=5 \

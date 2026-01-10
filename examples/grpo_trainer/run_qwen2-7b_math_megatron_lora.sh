@@ -9,6 +9,12 @@ set -xeuo pipefail
 # For Megatron communication/computation overlapping
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
+export PATH=$CONDA_PREFIX/bin:$PATH
+export CUDA_VISIBLE_DEVICES=8,9
+export NCCL_P2P_DISABLE=1
+PROJECT_PATH=$PWD
+DATA_PATH=$PROJECT_PATH/../verlData
+
 ############################ Quick Config ############################
 
 rollout_name="vllm" # sglang or vllm
@@ -19,17 +25,15 @@ adv_estimator=grpo
 
 max_prompt_length=1024
 max_response_length=1024
-train_prompt_bsz=128
+train_prompt_bsz=2
 
 ############################ Paths ############################
 
-gsm8k_train_path=$HOME/data/gsm8k/train.parquet
-gsm8k_test_path=$HOME/data/gsm8k/test.parquet
-math_train_path=$HOME/data/math/train.parquet
-math_test_path=$HOME/data/math/test.parquet
+gsm8k_train_path=$DATA_PATH/gsm8k/train.parquet
+gsm8k_test_path=$DATA_PATH/gsm8k/test.parquet
 
-train_files="['$gsm8k_train_path', '$math_train_path']"
-test_files="['$gsm8k_test_path', '$math_test_path']"
+train_files="['$gsm8k_train_path']"
+test_files="['$gsm8k_test_path']"
 
 ############################ Parameter Groups ############################
 
@@ -45,9 +49,9 @@ DATA=(
 )
 
 MODEL=(
-    actor_rollout_ref.model.path=Qwen/Qwen2-7B-Instruct
-    actor_rollout_ref.model.lora.rank=256
-    actor_rollout_ref.model.lora.alpha=512
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct
+    actor_rollout_ref.model.lora.rank=64
+    actor_rollout_ref.model.lora.alpha=32
     actor_rollout_ref.model.lora.lora_A_init_method=kaiming
     # # Optional: Use canonical LoRA
     # actor_rollout_ref.model.lora.type="canonical_lora"
@@ -60,13 +64,14 @@ MODEL=(
 
 ACTOR=(
     actor_rollout_ref.actor.optim.lr=1e-6
-    actor_rollout_ref.actor.ppo_mini_batch_size=16
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2
+    actor_rollout_ref.actor.ppo_mini_batch_size=2
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=5
     actor_rollout_ref.actor.use_dynamic_bsz=True
     actor_rollout_ref.actor.megatron.use_mbridge=True
     actor_rollout_ref.actor.megatron.vanilla_mbridge=False
     actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=1
-    actor_rollout_ref.actor.megatron.tensor_model_parallel_size=4
+    actor_rollout_ref.actor.megatron.tensor_model_parallel_size=1
+    actor_rollout_ref.actor.megatron.sequence_parallel=False
     actor_rollout_ref.actor.use_kl_loss=True
     actor_rollout_ref.actor.kl_loss_coef=0.001
     actor_rollout_ref.actor.kl_loss_type=low_var_kl
@@ -77,17 +82,18 @@ ACTOR=(
 )
 
 ROLLOUT=(
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4
-    actor_rollout_ref.rollout.tensor_model_parallel_size=2
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=5
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1
     actor_rollout_ref.rollout.name=$rollout_name
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6
     actor_rollout_ref.rollout.n=4
 )
 
 REF=(
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=5
     actor_rollout_ref.ref.megatron.pipeline_model_parallel_size=1
-    actor_rollout_ref.ref.megatron.tensor_model_parallel_size=4
+    actor_rollout_ref.ref.megatron.tensor_model_parallel_size=1
+    actor_rollout_ref.ref.megatron.sequence_parallel=False
 )
 
 ALGORITHM=(
@@ -96,15 +102,16 @@ ALGORITHM=(
 )
 
 TRAINER=(
-    trainer.logger='["console","wandb"]'
+    trainer.logger='["console"]'
     trainer.project_name=$project_name
     trainer.experiment_name=$exp_name
-    trainer.n_gpus_per_node=8
+    trainer.n_gpus_per_node=2
     trainer.nnodes=1
     trainer.save_freq=20
     trainer.test_freq=5
     trainer.total_epochs=15
     trainer.val_before_train=False
+    trainer.use_legacy_worker_impl=disable
 )
 
 ############################ Launch ############################

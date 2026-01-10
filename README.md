@@ -1,3 +1,464 @@
+# Activate conda in script
+
+```bash
+eval "$(conda shell.bash hook)"
+```
+
+# Install claude
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Login to claude: console.anthropic on tamu google account
+
+# Install UV
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+# Env setup
+
+```bash
+
+pip install --no-deps -e . # add verl to root w/o installing dependencies, which may cause conflicts with other packages in the environment. You can install dependencies separately if needed.
+
+/nvme-data/jacob/verl$ pytest -v # run tests to verify the installation
+```
+
+# Debug args
+
+```bash
+python3 -m verl.trainer.main_ppo \
+    trainer.resume_mode=disable \
+    data.train_files=$DATA_PATH/gsm8k/train.parquet \
+    data.val_files=$DATA_PATH/gsm8k/test.parquet \
+    actor_rollout_ref.rollout.agent.num_workers=2 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=2 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=5 \
+    data.train_batch_size=2 \
+    trainer.logger='["console"]' \
+```
+
+# Preprocess data
+
+```bash
+DATA_DIR=$(pwd)
+export HF_HOME=$DATA_DIR
+
+python -m examples.data_preprocess.gsm8k --local_save_dir $DATA_DIR/gsm8k
+```
+
+Pre-commit:
+
+```bash
+export PATH="$CONDA_PREFIX/bin:$PATH"
+git commit -m "your commit message"
+```
+
+# Megatron + TE + Bridge install (WORKING SOLUTION on dive8)
+
+Use this approach instead of the minimal one at the top. This works because:
+1. vllm installs PyTorch with correct CUDA version
+2. cuDNN/NCCL from PyPI wheels avoid system CUDA mismatch
+3. Environment variables guide builds to use the right libraries
+4. Install megatron-bridge from GitHub (not PyPI) to get VLMLoRA support
+
+## Key Issues Solved
+
+This installation handles several common problems on HPC systems:
+- **CUDA version mismatch**: System has CUDA 13.1, but PyTorch uses 12.8
+- **Missing cuDNN headers**: Compiler can't find cudnn.h from PyTorch's bundled CUDA
+- **VLMLoRA not available**: PyPI version (0.2.0rc6) lacks VLMLoRA, need 0.3.0+ from GitHub
+- **Optional deps fail to build**: Skip mamba-ssm, causal-conv1d which require CUDA compilation
+
+## Requirements
+
+- Python 3.12
+- NVIDIA GPU with driver supporting CUDA 12.4+
+- No sudo privileges required
+- Conda/Mamba and uv package manager
+
+## Installation Steps
+
+```bash
+
+conda create -n verlMega python=3.12 -y
+conda activate verlMega
+
+echo "1. install vllm (brings PyTorch with correct CUDA version)"
+uv pip install --no-cache-dir "vllm==0.11.0"
+
+echo "2. install basic packages"
+uv pip install "transformers[hf_xet]>=4.51.0" accelerate datasets peft hf-transfer \
+    "numpy<2.0.0" "pyarrow>=15.0.0" pandas "tensordict>=0.8.0,<=0.10.0,!=0.9.0" torchdata \
+    ray[default] codetiming hydra-core pylatexenc qwen-vl-utils wandb dill pybind11 liger-kernel mathruler \
+    pytest py-spy pre-commit ruff tensorboard 
+
+echo "pyext is lack of maintainace and cannot work with python 3.12."
+echo "if you need it for prime code rewarding, please install using patched fork:"
+echo "pip install git+https://github.com/ShaohonChen/PyExt.git@py311support"
+
+uv pip install "nvidia-ml-py>=12.560.30" "fastapi[standard]>=0.115.0" "optree>=0.13.0" "pydantic>=2.9" "grpcio>=1.62.1"
+
+
+echo "3. install FlashAttention and FlashInfer"
+# Install flash-attn-2.8.1 (cxx11abi=False)
+wget -nv https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl && \
+    uv pip install --no-cache-dir flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl
+
+# python -m pip install --no-cache-dir flashinfer-python==0.3.1
+
+
+
+echo "5. May need to fix opencv"
+uv pip install opencv-python
+uv pip install opencv-fixer && \
+    python -c "from opencv_fixer import AutoFix; AutoFix()"
+
+
+
+uv pip install gpustat ipykernel ipython
+
+
+export_variable_if_exists() {
+  local VAR_NAME="$1"
+  local PATH_VALUE="$2"
+  local APPEND="${3:-false}"
+
+  if [ -d "$PATH_VALUE" ] || [ -f "$PATH_VALUE" ]; then
+    if [ "$APPEND" = "true" ]; then
+      if [ -n "${!VAR_NAME:-}" ]; then
+        export "$VAR_NAME"="${!VAR_NAME}:$PATH_VALUE"
+      else
+        export "$VAR_NAME"="$PATH_VALUE"
+      fi
+    else
+      export "$VAR_NAME"="$PATH_VALUE"
+    fi
+    echo "$VAR_NAME is set to $PATH_VALUE"
+  else
+    echo "ERROR: $VAR_NAME path not found at $PATH_VALUE" >&2
+    # exit 1
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# TransformerEngine (no-sudo HPC friendly): install NCCL/cuDNN wheels + export paths
+# -----------------------------------------------------------------------------
+echo "6. install TE deps (NCCL + cuDNN) from PyPI"
+uv pip install --no-cache-dir "nvidia-nccl-cu12" "nvidia-cudnn-cu12"
+
+# Compute roots inside this env
+NCCL_HOME="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "nccl")
+PY
+)"
+CUDNN_HOME="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "cudnn")
+PY
+)"
+
+# Export paths (headers + libs)
+export_variable_if_exists NCCL_HOME "$NCCL_HOME" false
+export_variable_if_exists CPLUS_INCLUDE_PATH "$NCCL_HOME/include" true
+export_variable_if_exists C_INCLUDE_PATH      "$NCCL_HOME/include" true
+
+if [ -d "$NCCL_HOME/lib" ]; then
+  export_variable_if_exists LIBRARY_PATH    "$NCCL_HOME/lib" true
+  export_variable_if_exists LD_LIBRARY_PATH "$NCCL_HOME/lib" true
+elif [ -d "$NCCL_HOME/lib64" ]; then
+  export_variable_if_exists LIBRARY_PATH    "$NCCL_HOME/lib64" true
+  export_variable_if_exists LD_LIBRARY_PATH "$NCCL_HOME/lib64" true
+else
+  echo "ERROR: Neither $NCCL_HOME/lib nor $NCCL_HOME/lib64 exists" >&2
+#   exit 1
+fi
+
+export_variable_if_exists CUDNN_HOME "$CUDNN_HOME" false
+export_variable_if_exists CPLUS_INCLUDE_PATH "$CUDNN_HOME/include" true
+export_variable_if_exists C_INCLUDE_PATH      "$CUDNN_HOME/include" true
+if [ -d "$CUDNN_HOME/lib" ]; then
+  export_variable_if_exists LD_LIBRARY_PATH "$CUDNN_HOME/lib" true
+elif [ -d "$CUDNN_HOME/lib64" ]; then
+  export_variable_if_exists LD_LIBRARY_PATH "$CUDNN_HOME/lib64" true
+else
+  echo "ERROR: Neither $CUDNN_HOME/lib nor $CUDNN_HOME/lib64 exists" >&2
+  exit 1
+fi
+
+# Add all NVIDIA CUDA library paths (cublas, cuda_runtime, etc.)
+echo "Adding NVIDIA CUDA library paths to LD_LIBRARY_PATH"
+NVIDIA_ROOT="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia")
+PY
+)"
+for lib_dir in "$NVIDIA_ROOT"/*/lib; do
+  if [ -d "$lib_dir" ]; then
+    export_variable_if_exists LD_LIBRARY_PATH "$lib_dir" true
+  fi
+done
+
+# Optional: helps some CMake find logic
+export_variable_if_exists CMAKE_PREFIX_PATH "$NCCL_HOME" true
+export_variable_if_exists CMAKE_PREFIX_PATH "$CUDNN_HOME" true
+
+# Sanity checks
+test -f "$NCCL_HOME/include/nccl.h" || (echo "Missing nccl.h at $NCCL_HOME/include/nccl.h" >&2; exit 1)
+python - <<'PY'
+import site, pathlib, glob
+root = pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "cudnn"
+hits = glob.glob(str(root / "**/libcudnn_graph.so*"), recursive=True)
+print("Found libcudnn_graph:", hits[:3])
+assert hits, "libcudnn_graph not found in nvidia-cudnn-cu12 install"
+PY
+
+echo "7. install TransformerEngine"
+uv pip install --no-build-isolation transformer_engine[pytorch]
+
+echo "8. verify import"
+python - <<'PY'
+import transformer_engine as te
+print("TransformerEngine import OK:", te.__version__)
+PY
+
+uv pip install --no-deps git+https://github.com/NVIDIA/Megatron-LM.git@core_v0.13.1
+
+echo "9. install Megatron-Bridge (from GitHub to get VLMLoRA support)"
+# Install megatron-bridge 0.3.0+ from GitHub (PyPI version 0.2.0rc6 lacks VLMLoRA)
+# Use --no-deps to avoid building causal-conv1d, mamba-ssm which fail with CUDA version mismatches
+echo "Installing megatron-bridge 0.3.0rc0+ from GitHub..."
+uv pip install --no-deps git+https://github.com/NVIDIA-NeMo/Megatron-Bridge.git
+
+# Install megatron-core without deps
+uv pip install --no-deps "megatron-core>=0.15.0"
+
+# Install required runtime dependencies
+echo "Installing required dependencies..."
+# nvidia-modelopt is required for megatron-bridge 0.3.0+
+uv pip install nvidia-modelopt
+# Other runtime dependencies (skip dev extras like mamba-ssm, causal-conv1d)
+uv pip install apex transformers nltk six importlib-metadata zarr tensorstore packaging
+
+echo "10. Verify megatron-bridge installation"
+python - <<'PY'
+from megatron.bridge.peft.lora import LoRA, VLMLoRA
+print("Megatron-Bridge import OK")
+print("LoRA available:", LoRA)
+print("VLMLoRA available:", VLMLoRA)
+PY
+
+echo "Successfully installed all packages (TransformerEngine + Megatron-Bridge with VLMLoRA) ✅"
+
+```
+
+# Megatron train script
+
+```bash
+#!/usr/bin/env bash
+set -xeuo pipefail
+
+# Need to install Megatron-Bridge
+# NOTE: Make sure you use Megatron-Bridge later than 0.2.0 
+# (Recommend https://github.com/NVIDIA-NeMo/Megatron-Bridge/commit/953aabf75c0500180dc14a6a76cf9e7e7c4baec7 or later)
+# for proper MoE LoRA support.
+
+# For Megatron communication/computation overlapping
+export CUDA_DEVICE_MAX_CONNECTIONS=1
+
+export PATH=$CONDA_PREFIX/bin:$PATH
+export CUDA_VISIBLE_DEVICES=8,9
+export NCCL_P2P_DISABLE=1
+PROJECT_PATH=$PWD
+DATA_PATH=$PROJECT_PATH/../verlData
+
+############################ Quick Config ############################
+
+rollout_name="vllm" # sglang or vllm
+project_name='verl_grpo_example_gsm8k_math'
+exp_name='qwen2_7b_megatron_lora'
+
+adv_estimator=grpo
+
+max_prompt_length=1024
+max_response_length=1024
+train_prompt_bsz=2
+
+############################ Paths ############################
+
+gsm8k_train_path=$DATA_PATH/gsm8k/train.parquet
+gsm8k_test_path=$DATA_PATH/gsm8k/test.parquet
+
+train_files="['$gsm8k_train_path']"
+test_files="['$gsm8k_test_path']"
+
+############################ Parameter Groups ############################
+
+DATA=(
+    data.train_files="$train_files"
+    data.val_files="$test_files"
+    data.max_prompt_length=$max_prompt_length
+    data.max_response_length=$max_response_length
+    data.train_batch_size=$train_prompt_bsz
+    data.filter_overlong_prompts=True
+    data.truncation='error'
+    data.shuffle=False
+)
+
+MODEL=(
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct
+    actor_rollout_ref.model.lora.rank=64
+    actor_rollout_ref.model.lora.alpha=32
+    actor_rollout_ref.model.lora.lora_A_init_method=kaiming
+    # # Optional: Use canonical LoRA
+    # actor_rollout_ref.model.lora.type="canonical_lora"
+    # actor_rollout_ref.model.lora.target_modules='["linear_q","linear_k","linear_v","linear_proj","linear_fc1_up","linear_fc1_gate","linear_fc2"]'
+
+    # # Optional: Add dropout to LoRA layers
+    # actor_rollout_ref.model.lora.dropout=0.05
+    # actor_rollout_ref.model.lora.dropout_position=pre
+)
+
+ACTOR=(
+    actor_rollout_ref.actor.optim.lr=1e-6
+    actor_rollout_ref.actor.ppo_mini_batch_size=2
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=5
+    actor_rollout_ref.actor.use_dynamic_bsz=True
+    actor_rollout_ref.actor.megatron.use_mbridge=True
+    actor_rollout_ref.actor.megatron.vanilla_mbridge=False
+    actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=1
+    actor_rollout_ref.actor.megatron.tensor_model_parallel_size=1
+    actor_rollout_ref.actor.megatron.sequence_parallel=False
+    actor_rollout_ref.actor.use_kl_loss=True
+    actor_rollout_ref.actor.kl_loss_coef=0.001
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl
+    actor_rollout_ref.actor.entropy_coeff=0
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_method=uniform
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_granularity=full
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_num_layers=1
+)
+
+ROLLOUT=(
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=5
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1
+    actor_rollout_ref.rollout.name=$rollout_name
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6
+    actor_rollout_ref.rollout.n=4
+)
+
+REF=(
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=5
+    actor_rollout_ref.ref.megatron.pipeline_model_parallel_size=1
+    actor_rollout_ref.ref.megatron.tensor_model_parallel_size=1
+    actor_rollout_ref.ref.megatron.sequence_parallel=False
+)
+
+ALGORITHM=(
+    algorithm.adv_estimator=$adv_estimator
+    algorithm.use_kl_in_reward=False
+)
+
+TRAINER=(
+    trainer.logger='["console"]'
+    trainer.project_name=$project_name
+    trainer.experiment_name=$exp_name
+    trainer.n_gpus_per_node=1
+    trainer.nnodes=1
+    trainer.save_freq=20
+    trainer.test_freq=5
+    trainer.total_epochs=15
+    trainer.val_before_train=False
+    trainer.use_legacy_worker_impl=disable
+)
+
+############################ Launch ############################
+
+python3 -m verl.trainer.main_ppo \
+    --config-path=config \
+    --config-name='ppo_megatron_trainer.yaml' \
+    "${DATA[@]}" \
+    "${ALGORITHM[@]}" \
+    "${MODEL[@]}" \
+    "${ROLLOUT[@]}" \
+    "${ACTOR[@]}" \
+    "${REF[@]}" \
+    "${TRAINER[@]}" \
+    "$@"
+
+
+```
+
+# FSDP train script
+
+```bash
+set -x
+
+export PATH=$CONDA_PREFIX/bin:$PATH
+export CUDA_VISIBLE_DEVICES=8,9
+export NCCL_P2P_DISABLE=1
+PROJECT_PATH=$PWD
+DATA_PATH=$PROJECT_PATH/../verlData
+
+python3 -m verl.trainer.main_ppo \
+    trainer.resume_mode=disable \
+    data.train_files=$DATA_PATH/gsm8k/train.parquet \
+    data.val_files=$DATA_PATH/gsm8k/test.parquet \
+    actor_rollout_ref.rollout.agent.num_workers=2 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=2 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=5 \
+    data.train_batch_size=2 \
+    trainer.logger='["console"]' \
+    algorithm.adv_estimator=grpo \
+    trainer.val_before_train=False \
+    data.max_prompt_length=512 \
+    data.max_response_length=1024 \
+    data.filter_overlong_prompts=True \
+    data.truncation='error' \
+    data.shuffle=False \
+    actor_rollout_ref.model.lora_rank=64 \
+    actor_rollout_ref.model.lora_alpha=32 \
+    actor_rollout_ref.actor.optim.lr=3e-6 \
+    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_coef=0.001 \
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+    actor_rollout_ref.actor.entropy_coeff=0 \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.load_format=safetensors \
+    actor_rollout_ref.rollout.layered_summon=True \
+    actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    algorithm.use_kl_in_reward=False \
+    trainer.critic_warmup=0 \
+    trainer.project_name='verl_grpo_example_gsm8k' \
+    trainer.experiment_name='qwen2.5_3b_grpo_lora' \
+    trainer.n_gpus_per_node=2 \
+    trainer.nnodes=1 \
+    trainer.save_freq=20 \
+    trainer.test_freq=5 \
+    trainer.total_epochs=15 $@
+
+    # actor_rollout_ref.actor.ppo_mini_batch_size=256 \
+    # data.train_batch_size=1024 \
+    # trainer.n_gpus_per_node=8 \
+    # actor_rollout_ref.model.use_shm=True \
+
+```
 <div align="center">
  👋 Hi, everyone!
     verl is a RL training library initiated by <b>ByteDance Seed team</b> and maintained by the verl community.
