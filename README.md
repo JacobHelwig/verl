@@ -31,6 +31,11 @@ pip install --no-deps -e . # add verl to root w/o installing dependencies, which
 
 ```bash
 python3 -m verl.trainer.main_ppo \
+    actor_rollout_ref.actor.use_torch_compile=False \
+    actor_rollout_ref.actor.fsdp_config.use_torch_compile=False \
+    trainer.val_before_train=False \
+    actor_rollout_ref.rollout.enforce_eager=True \
+    actor_rollout_ref.ref.fsdp_config.use_torch_compile=False \
     trainer.resume_mode=disable \
     data.train_files=$DATA_PATH/gsm8k/train.parquet \
     data.val_files=$DATA_PATH/gsm8k/test.parquet \
