@@ -464,6 +464,349 @@ python3 -m verl.trainer.main_ppo \
     # actor_rollout_ref.model.use_shm=True \
 
 ```
+
+# Doc string instructions
+
+```md
+# Docstring Instructions for On-Policy Distillation
+
+## Overview
+Add comprehensive docstrings to all functions and classes in the on-policy distillation PR, following the format from `compute_policy_loss_vanilla` in `verl/trainer/ppo/core_algos.py:1160`.
+
+This includes:
+- Adding docstrings to new functions/classes that lack them
+- Fixing existing docstrings that are incomplete, inaccurate, or don't follow the standard format
+- Ensuring all tensor parameters include shape information
+- Fixing any bugs discovered in the code (e.g., undefined variables)
+
+## Finding What Needs Documentation
+
+### Step 1: Identify Files Changed in the PR
+
+Use git diff to find all Python files modified in your branch:
+
+```bash
+# See all changed files compared to main branch
+git diff --name-only main...HEAD | grep "\.py$"
+
+# Or if you want to see which functions were added/modified
+git diff main...HEAD --stat
+```
+
+
+### Step 2: Find New or Modified Functions
+
+Use git diff to see the actual changes and identify new functions:
+
+```bash
+# See full diff of a specific file
+git diff main...HEAD verl/trainer/distillation/losses.py
+
+# Filter to show only function definitions added
+git diff main...HEAD verl/trainer/distillation/losses.py | grep "^+def "
+```
+
+Look for:
+- Lines starting with `+def` (new functions)
+- Lines starting with `+class` (new classes)
+- Existing functions with modified signatures or docstrings
+
+### Step 3: Review Each Function/Class
+
+For each function or class you find, check:
+
+1. **Does it have a docstring at all?**
+   - Look for TODO placeholders
+   - Look for single-line summaries without Args/Returns
+   - Look for completely missing docstrings
+
+2. **Is the existing docstring complete?**
+   - Does it have an Args section for all parameters?
+   - Does it have a Returns section?
+   - For classes, does it have an Attributes section?
+
+3. **Is the docstring accurate?**
+   - Do the parameter names match the function signature?
+   - Are shapes documented correctly?
+   - Are optional parameters marked as such?
+
+4. **Does it follow the standard format?**
+   - Compare against `compute_policy_loss_vanilla` in `verl/trainer/ppo/core_algos.py:1160`
+   - Check Args formatting: `param_name (Type):` not `param_name: \`(Type)\``
+   - Check for proper indentation
+
+5. **Are there any bugs in the code?**
+   - Look for undefined variables
+   - Look for parameter mismatches (e.g., using wrong variable names)
+
+### Step 4: Systematic Review Process
+
+For each file, go through line by line:
+
+```bash
+# Read a specific file and look at line numbers
+cat -n verl/trainer/distillation/losses.py
+
+# Or use grep to find all function definitions
+grep -n "^def \|^class " verl/trainer/distillation/losses.py
+```
+
+Create a checklist of functions/classes that need work, noting:
+- Line number
+- Function/class name
+- What needs to be fixed (missing docstring, incomplete Args, formatting issues, etc.)
+
+### Common Issues to Look For
+
+1. **TODO placeholders**: Search for `TODO` in docstrings
+2. **Single-line docstrings**: Functions with only a summary, no Args/Returns
+3. **Duplicate Args entries**: Same parameter documented twice
+4. **Missing Returns section**: Functions that return values but don't document them
+5. **Incorrect formatting**: Using backticks instead of parentheses for types
+6. **Missing shape information**: Tensor parameters without shape docs
+7. **Missing optional markers**: Optional params not marked as `(Type, optional)`
+8. **Code bugs**: Variables used before definition, mismatched parameter names
+
+### Example Git Diff Analysis
+
+```bash
+$ git diff main...HEAD verl/trainer/distillation/losses.py | head -50
+
+# You might see:
++def compute_distillation_loss_kl_estimator(
++    teacher_log_probs: torch.Tensor,
++    student_log_probs: torch.Tensor,
++    ...
++):
++    """Compute the distillation loss and related metrics using KL estimator"""
++    assert config is not None
++    log_p, log_q = clamp_log_probs(log_p, log_q)  # BUG: undefined variables!
+```
+
+This reveals:
+1. New function `compute_distillation_loss_kl_estimator`
+2. Has a single-line docstring (incomplete)
+3. Has a bug on line with `clamp_log_probs` (uses undefined `log_p, log_q`)
+
+## Reference Format
+
+The standard docstring format used in this codebase (see `compute_policy_loss_vanilla` at verl/trainer/ppo/core_algos.py:1160):
+
+```python
+def function_name(param1: Type1, param2: Type2, ...) -> ReturnType:
+    """
+    One-line summary of what the function does.
+
+    (Optional) Additional context, source references, or background information.
+    Can span multiple lines if needed.
+
+    Args:
+        param1 (Type1):
+            Description of param1, including shape information if applicable.
+        param2 (Type2):
+            Description of param2, including shape information if applicable.
+        optional_param (Type, optional):
+            Description of optional parameter. Defaults to value.
+        config: `(ConfigType)`:
+            Description of config parameter.
+
+    Returns:
+        ReturnType: Description of return value, including shape information if applicable.
+        For tuple returns: tuple[Type1, Type2]: Description of tuple elements.
+    """
+```
+
+### Key Format Requirements
+
+1. **Summary**: One clear line describing the function's purpose
+2. **Additional context** (optional): References, formulas, background info
+3. **Args section**:
+   - Format: `param_name (Type):` or `param_name (Type, optional):`
+   - Indent description under the parameter
+   - Include tensor shapes: `shape (batch_size, seq_length, vocab_size)`
+   - Note default values for optional parameters
+   - Config parameters can use backtick style: `config: \`(ConfigType)\`:`
+4. **Returns section**:
+   - Format: `ReturnType: Description`
+   - For tuples, list each element with indentation
+   - Include shape information for tensors
+5. **Attributes section** (for classes):
+   - Format: `attribute_name (Type):`
+   - Describe purpose and any computed/derived attributes
+
+## Examples
+
+### Good Example: Function with Tensor Parameters
+
+```python
+def topk_logprobs_from_logits(
+    logits: torch.Tensor, k: int, compute_topk: bool, gather_topk: bool, topk_indices: Optional[torch.Tensor] = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute and/or gather top-k log probabilities from logits.
+
+    This function supports two modes:
+    1. Computing new top-k log probabilities from logits
+    2. Gathering log probabilities at pre-specified indices
+    Both modes can be combined to gather from both teacher and student top-k indices.
+
+    Args:
+        logits (torch.Tensor):
+            Logits from model forward pass, shape (*, vocab_size).
+        k (int):
+            Number of top log probabilities to compute or gather.
+        compute_topk (bool):
+            Whether to compute top-k log probabilities from the logits.
+        gather_topk (bool):
+            Whether to gather log probabilities at indices specified by topk_indices.
+        topk_indices (torch.Tensor, optional):
+            Pre-computed indices for gathering log probabilities, shape (*, k) or (*, 2*k).
+            Required when gather_topk is True. Defaults to None.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+            - topk_logprobs: Top-k log probabilities, shape (*, k) or (*, 2*k).
+            - topk_indices: Indices corresponding to the top-k log probabilities, same shape as topk_logprobs.
+    """
+```
+
+### Good Example: Class with Attributes
+
+```python
+@dataclass
+class DistillationLossInfo:
+    """
+    Information about a distillation loss function to be registered.
+
+    Attributes:
+        names (list[str] | str):
+            Name(s) of the distillation loss function. Can be a single name or list of aliases.
+        use_student_topk (bool):
+            Whether the loss function requires student top-k log probabilities. Defaults to False.
+        use_teacher_topk (bool):
+            Whether the loss function requires teacher top-k log probabilities. Defaults to False.
+        use_full (bool):
+            Whether the loss function requires full vocabulary log probabilities. Defaults to False.
+        use_topk (bool):
+            Computed attribute indicating whether any top-k log probabilities are needed.
+            Set automatically in __post_init__ based on use_student_topk or use_teacher_topk.
+    """
+    names: list[str] | str
+    use_student_topk: bool = False
+    use_teacher_topk: bool = False
+    use_full: bool = False
+```
+
+## Tips
+
+- Always include shape information for tensor parameters
+- Use `(*, dim)` notation when shapes are flexible
+- Document what each stage does in functions that handle multiple stages
+- Explain formulas and algorithms when relevant
+- Add references to papers or external documentation when applicable
+- For config parameters, use the backtick style: `config: \`(ConfigType)\``
+- Mark optional parameters and include their default values
+- For tuple returns, list each element on a separate indented line
+
+## Fixing Existing Docstrings
+
+Not all docstrings need to be written from scratch. Many functions already have partial or incorrectly formatted docstrings that need to be fixed:
+
+### Common Fixes Needed
+
+1. **Formatting Fixes**
+   ```python
+   # WRONG:
+   Args:
+       name: `(str)`
+           The name of the loss function.
+
+   # CORRECT:
+   Args:
+       name (str):
+           The name of the loss function.
+   ```
+
+2. **Missing Returns Section**
+   ```python
+   # INCOMPLETE:
+   def register_loss(info):
+       """Register a loss function.
+
+       Args:
+           info: Loss information.
+       """
+
+   # COMPLETE:
+   def register_loss(info):
+       """Register a loss function.
+
+       Args:
+           info: Loss information.
+
+       Returns:
+           function: Decorator function that registers the loss.
+       """
+   ```
+
+3. **Duplicate Args Entries**
+   ```python
+   # WRONG (response_mask listed twice):
+   Args:
+       response_mask (torch.Tensor):
+           Mask for tokens.
+       config (Config):
+           Configuration.
+       response_mask (torch.Tensor):
+           Mask for tokens.
+
+   # CORRECT:
+   Args:
+       response_mask (torch.Tensor):
+           Mask for tokens.
+       config (Config):
+           Configuration.
+   ```
+
+4. **Missing Shape Information**
+   ```python
+   # INCOMPLETE:
+   Args:
+       logits (torch.Tensor):
+           Model logits.
+
+   # COMPLETE:
+   Args:
+       logits (torch.Tensor):
+           Model logits, shape (batch_size, sequence_length, vocab_size).
+   ```
+
+5. **Inaccurate Descriptions**
+   - Parameter names in docstring don't match actual function parameters
+   - Descriptions don't accurately reflect what the code does
+   - Missing information about special behavior (e.g., duplicate handling)
+
+### Fixing Code Bugs Found During Documentation
+
+While documenting, you may discover bugs in the code itself:
+
+```python
+# BUG: Using undefined variables
+def compute_loss(teacher_log_probs, student_log_probs):
+    """Compute loss..."""
+    log_p, log_q = clamp_log_probs(log_p, log_q)  # log_p and log_q undefined!
+
+# FIX: Use the actual parameter names
+def compute_loss(teacher_log_probs, student_log_probs):
+    """Compute loss..."""
+    log_p, log_q = clamp_log_probs(teacher_log_probs, student_log_probs)
+```
+
+**Always fix these bugs when you find them** - documenting broken code doesn't help anyone!
+
+
+```
+
 <div align="center">
  👋 Hi, everyone!
     verl is a RL training library initiated by <b>ByteDance Seed team</b> and maintained by the verl community.
