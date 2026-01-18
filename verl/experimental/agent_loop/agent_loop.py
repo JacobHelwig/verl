@@ -127,6 +127,7 @@ class AgentLoopMetrics(BaseModel):
 
     generate_sequences: float = 0.0
     tool_calls: float = 0.0
+    num_preempted: int = -1  # -1 means not available
 
 
 class AgentLoopOutput(BaseModel):
@@ -904,7 +905,7 @@ class AgentLoopManager:
         if rollout_config.prometheus.enable:
             if rollout_config.disable_log_stats:
                 raise ValueError("PROMETHEUS needs disable_log_stats==False, but it is currently True.")
-            update_prometheus_config(rollout_config.prometheus, self.server_addresses)
+            update_prometheus_config(rollout_config.prometheus, self.server_addresses, rollout_config.name)
 
     def _init_agent_loop_workers(self):
         self.agent_loop_workers = []
@@ -963,6 +964,10 @@ class AgentLoopManager:
         timing = {}
         t_generate_sequences = np.array([metric["generate_sequences"] for chunk in metrics for metric in chunk])
         t_tool_calls = np.array([metric["tool_calls"] for chunk in metrics for metric in chunk])
+        num_preempted = np.array([metric["num_preempted"] for chunk in metrics for metric in chunk])
+        timing["agent_loop/num_preempted/min"] = num_preempted.min()
+        timing["agent_loop/num_preempted/max"] = num_preempted.max()
+        timing["agent_loop/num_preempted/mean"] = num_preempted.mean()
         timing["agent_loop/generate_sequences/min"] = t_generate_sequences.min()
         timing["agent_loop/generate_sequences/max"] = t_generate_sequences.max()
         timing["agent_loop/generate_sequences/mean"] = t_generate_sequences.mean()
