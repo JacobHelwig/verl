@@ -237,6 +237,8 @@ def compute_topk_distillation_inputs(
                     )
         case _:
             raise ValueError(f"Unexpected stage: {stage}")
+    if topk_indices is None and not should_compute_topk:
+        return {}
     topk_logprobs, topk_indices = topk_logprobs_from_logits(
         logits=logits,
         k=topk,

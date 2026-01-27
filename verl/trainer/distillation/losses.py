@@ -184,7 +184,7 @@ def kullback_leibler_divergence(
 @register_distillation_loss(
     DistillationLossSettings(
         names=["jsd_topk", "forward_kl_topk", "reverse_kl_topk", "jsd_topk+", "forward_kl_topk+", "reverse_kl_topk+"],
-        use_student_topk=True,
+        use_student_topk=False,
         use_teacher_topk=True,
     )
 )  # type: ignore[arg-type]
