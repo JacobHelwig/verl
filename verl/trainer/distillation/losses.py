@@ -20,6 +20,8 @@ import torch
 import verl.trainer.distillation.fsdp.losses as fsdp_losses
 from verl.base_config import BaseConfig
 from verl.trainer.distillation.types import DistillationLossInputs
+from verl.trainer.distillation.fsdp import losses as fsdp_losses
+from verl.trainer.distillation.megatron import losses as megatron_losses
 from verl.trainer.ppo.core_algos import agg_loss, kl_penalty
 from verl.utils.metric import AggregationType, Metric
 from verl.workers.config import DistillationConfig
