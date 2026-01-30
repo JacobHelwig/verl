@@ -106,10 +106,9 @@ def clamp_log_probs(log_p: torch.Tensor, log_q: torch.Tensor, eps: float = 1e-8)
 
 def kl_divergence(log_q: torch.Tensor, log_p: torch.Tensor, take_abs: bool) -> torch.Tensor:
     """Compute KL divergence between two distributions given their log probabilities."""
-    kld = F.kl_div(input=log_q, target=log_p, reduction="none", log_target=True)
-    if take_abs:
-        kld = kld.abs()
-    return kld.sum(dim=-1)
+    p = log_p.exp()
+    kld = (p * (log_p - log_q)).sum(dim=-1)
+    return kld
 
 
 def jensen_shannon_divergence(
