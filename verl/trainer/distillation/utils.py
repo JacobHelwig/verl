@@ -21,8 +21,8 @@ import torch
 from tensordict import TensorDict
 
 from verl.trainer.distillation.fsdp import utils as fsdp_utils
-from verl.trainer.distillation.megatron import utils as megatron_utils
 from verl.trainer.distillation.losses import DistillationLossSettings, get_distillation_loss_settings
+from verl.trainer.distillation.megatron import utils as megatron_utils
 from verl.trainer.distillation.types import DistillationLossInputs
 from verl.utils.stages import Stage
 from verl.workers.config import DistillationConfig
@@ -70,10 +70,12 @@ def is_distillation_enabled(config: Optional[DistillationConfig]) -> bool:
         return False
     return config.enabled
 
+
 def distillation_requires_logits(config: DistillationConfig) -> bool:
     """Check if distillation loss requires logits based on the provided configuration."""
     distillation_settings: DistillationLossSettings = config.loss_settings
     return distillation_settings.use_topk or distillation_settings.use_full
+
 
 def compute_distillation_inputs(
     logits: torch.Tensor, batch: TensorDict, cu_seqlens: Optional[torch.Tensor], config: Optional[DistillationConfig]
