@@ -16,6 +16,8 @@ import logging
 import os
 from typing import Optional
 
+from verl.workers.config.actor import DistillationConfig
+
 try:
     from mindspeed.megatron_adaptor import repatch
 except ImportError:
