@@ -4,7 +4,7 @@ conda activate verl
 export PATH=$CONDA_PREFIX/bin:$PATH
 # export NCCL_P2P_DISABLE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=3,4
+export CUDA_VISIBLE_DEVICES=4,5
 export DATA_PATH=$PWD/../verlData
 export HF_HOME=$DATA_PATH
 export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
@@ -17,16 +17,17 @@ ROLLOUT_NAME="vllm" # sglang or vllm
 
 FAMILY="Qwen"
 STUDENT_MODEL=Qwen2.5-0.5B
-TEACHER_MODEL=Qwen2.5-7B-Instruct
+TEACHER_MODEL_MATH=Qwen2.5-0.5B
+TEACHER_MODEL_CODING=Qwen2.5-0.5B
 
-DISTILLATION_LOSS_MODE="k3"
+# DISTILLATION_LOSS_MODE="k3"
 DISTILLATION_LOSS_MODE="forward_kl_topk"
 
-DISTILLATION_LOSS_MAX_CLAMP=10.0
-DISTILLATION_LOG_PROB_MIN_CLAMP=null
+DISTILLATION_LOSS_MAX_CLAMP=null
+DISTILLATION_LOG_PROB_MIN_CLAMP=-10
 
 PROJECT_NAME='verl_on_policy_distillation_example_gsm8k'
-EXP_NAME="${FAMILY}/student-${STUDENT_MODEL}/teacher-${TEACHER_MODEL}/loss-${DISTILLATION_LOSS_MODE}-maxclamp-${DISTILLATION_LOSS_MAX_CLAMP}-logprobminclamp-${DISTILLATION_LOG_PROB_MIN_CLAMP}"
+EXP_NAME="${FAMILY}/student-${STUDENT_MODEL}/teacher-coding-${TEACHER_MODEL_CODING}/teacher-math-${TEACHER_MODEL_MATH}/loss-${DISTILLATION_LOSS_MODE}-maxclamp-${DISTILLATION_LOSS_MAX_CLAMP}-logprobminclamp-${DISTILLATION_LOG_PROB_MIN_CLAMP}"
 
 MAX_PROMPT=256
 MAX_RESPONSE_LENGTH=512
@@ -78,8 +79,13 @@ DISTILLATION=(
     actor_rollout_ref.distillation.log_prob_micro_batch_size_per_gpu=$TEACHER_MICRO_BATCH_SIZE_PER_GPU
     actor_rollout_ref.distillation.log_prob_max_token_len_per_gpu=$TEACHER_MAX_TOKEN_LEN_PER_GPU
     actor_rollout_ref.distillation.fsdp_config.param_offload=True
-    actor_rollout_ref.distillation.teacher_model.path="${FAMILY}/${TEACHER_MODEL}"
-    actor_rollout_ref.distillation.teacher_model.use_remove_padding=True
+    actor_rollout_ref.distillation.teacher_models.teacher0.path="${FAMILY}/${TEACHER_MODEL_MATH}"
+    actor_rollout_ref.distillation.teacher_models.teacher0.use_remove_padding=True
+    actor_rollout_ref.distillation.teacher_models.teacher0.domain="math"
+    actor_rollout_ref.distillation.teacher_models.teacher1.path="${FAMILY}/${TEACHER_MODEL_CODING}"
+    actor_rollout_ref.distillation.teacher_models.teacher1.use_remove_padding=True
+    actor_rollout_ref.distillation.teacher_models.teacher1.domain="coding"
+    actor_rollout_ref.distillation.teacher_models.num_teachers=2
     actor_rollout_ref.distillation.ulysses_sequence_parallel_size=$SP_SIZE
 )
 
@@ -110,7 +116,7 @@ ALGORITHM=(
 )
 
 TRAINER=(
-    trainer.logger='["console","wandb"]'
+    trainer.logger='["console"]'
     trainer.project_name=$PROJECT_NAME
     trainer.experiment_name=$EXP_NAME
     trainer.n_gpus_per_node=$WORLD_SIZE
