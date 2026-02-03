@@ -1289,6 +1289,9 @@ class RayPPOTrainer:
         if self.use_legacy_worker_impl == "disable":
             # step 1: convert dataproto to tensordict.
             batch_td = batch.to_tensordict()
+
+            # step 2: split into domain-specific tensordicts.
+            # domain_batch_idx is a list for re-merging after knowledge acquisition from each teacher.
             data_source_key = self.config.data.reward_fn_key
             data_sources = batch_td.get(data_source_key)
             if data_sources is None:
@@ -1306,31 +1309,40 @@ class RayPPOTrainer:
                     if i == len(self.teacher_config_list) - 1:
                         raise ValueError(f"Example domain {example_domain} not found in any teacher config domain.")
             domain_batch_td_list = [tu.concat_tensordict(domain_batch_ls) if domain_batch_ls else [] for domain_batch_ls in domain_batch_list]
+
+            # step 3: acquire teacher knowledge for each domain.
             output_nested_tensors_ls = dict()
             for i, domain_batch_td in enumerate(domain_batch_td_list):
                 if len(domain_batch_td) == 0:
                     continue
-                # step 2: convert from padding to nopadding
+                
+                # convert from padding to no padding.
                 domain_batch_td = left_right_2_no_padding(domain_batch_td)
-                # step 3: add meta info
+                
+                # add meta info.
                 metadata = {"calculate_entropy": False, "compute_loss": False, "stage": Stage.ACQUIRE_TEACHER_KNOWLEDGE}
+                
+                # teacher knowledge acquisition.
                 tu.assign_non_tensor(domain_batch_td, **metadata)
                 teacher_role = f"{str(Role.TeacherPolicy)}_{i}"
                 teacher_wg = self.teacher_policy_wgs[teacher_role]
                 output = teacher_wg.acquire_teacher_knowledge(domain_batch_td)
 
                 # gather output
-                if not output_nested_tensors_ls:
-                    output_nested_tensors_ls = {key: [None] * len(batch_td) for key in distillation_inputs}
                 distillation_inputs = extract_distillation_inputs(
                     stage=Stage.ACQUIRE_TEACHER_KNOWLEDGE, output=output, config=self.config.actor_rollout_ref.distillation
                 )
 
+                # put each output nested tensor into the position it was in for the original batch.
+                if not output_nested_tensors_ls:
+                    output_nested_tensors_ls = {key: [None] * len(batch_td) for key in distillation_inputs}
                 for key, distillation_input_nested in distillation_inputs.items():
                     distillation_input_ls = distillation_input_nested.values().split_with_sizes(tuple(distillation_input_nested.offsets().diff()))
                     for k, distillation_input in zip(domain_batch_idx[i], distillation_input_ls, strict=True):
                         output_nested_tensors_ls[key][k] = distillation_input                
-            
+
+            # step 4: re-merge outputs from different teachers.
+            # perform a sanity check to check that the ordering of outputs matches the original batch.            
             batch_td_nested = left_right_2_no_padding(batch_td)
             pre_split_offsets = batch_td_nested['input_ids'].offsets()
             output_nested_tensors = dict()

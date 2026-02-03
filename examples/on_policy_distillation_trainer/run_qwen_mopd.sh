@@ -4,7 +4,7 @@ conda activate verl
 export PATH=$CONDA_PREFIX/bin:$PATH
 export NCCL_P2P_DISABLE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=4,5
+export CUDA_VISIBLE_DEVICES=6,7
 export DATA_PATH=$PWD/../verlData
 export HF_HOME=$DATA_PATH
 export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
@@ -17,8 +17,8 @@ ROLLOUT_NAME="vllm" # sglang or vllm
 
 FAMILY="Qwen"
 STUDENT_MODEL=Qwen2.5-0.5B
-TEACHER_MODEL_MATH=Qwen2.5-0.5B
-TEACHER_MODEL_CODING=Qwen2.5-0.5B
+TEACHER_MODEL_MATH=Qwen2.5-Math-1.5B-Instruct
+TEACHER_MODEL_CODING=Qwen2.5-Coder-1.5B-Instruct
 
 # DISTILLATION_LOSS_MODE="k3"
 DISTILLATION_LOSS_MODE="forward_kl_topk"
@@ -26,15 +26,15 @@ DISTILLATION_LOSS_MODE="forward_kl_topk"
 DISTILLATION_LOSS_MAX_CLAMP=null
 DISTILLATION_LOG_PROB_MIN_CLAMP=-10
 
-PROJECT_NAME='verl_on_policy_distillation_example_gsm8k'
+PROJECT_NAME='verl_multi_task_on_policy_distillation_example_gsm8k'
 EXP_NAME="${FAMILY}/student-${STUDENT_MODEL}/teacher-coding-${TEACHER_MODEL_CODING}/teacher-math-${TEACHER_MODEL_MATH}/loss-${DISTILLATION_LOSS_MODE}-maxclamp-${DISTILLATION_LOSS_MAX_CLAMP}-logprobminclamp-${DISTILLATION_LOG_PROB_MIN_CLAMP}"
 
-MAX_PROMPT=256
-MAX_RESPONSE_LENGTH=128
-TRAIN_PROMPT_BSZ=8
-STUDENT_MICRO_BATCH_SIZE_PER_GPU=2
+MAX_PROMPT=1024
+MAX_RESPONSE_LENGTH=1024
+TRAIN_PROMPT_BSZ=128
+STUDENT_MICRO_BATCH_SIZE_PER_GPU=1
 STUDENT_MAX_TOKEN_LEN_PER_GPU=$(( STUDENT_MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
-TEACHER_MICRO_BATCH_SIZE_PER_GPU=2
+TEACHER_MICRO_BATCH_SIZE_PER_GPU=1
 TEACHER_MAX_TOKEN_LEN_PER_GPU=$(( TEACHER_MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
 
 WORLD_SIZE=2
@@ -45,8 +45,17 @@ SP_SIZE=1
 gsm8k_train_path=$DATA_PATH/gsm8k/train.parquet
 gsm8k_test_path=$DATA_PATH/gsm8k/test.parquet
 
-TRAIN_FILES="['$gsm8k_train_path']"
-TEST_FILES="['$gsm8k_test_path']"
+math_train_path=$DATA_PATH/math_dataset/train.parquet
+math_test_path=$DATA_PATH/math_dataset/test.parquet
+
+codeforces_train_path=$DATA_PATH/codeforces/train.parquet
+codeforces_test_path=$DATA_PATH/codeforces/test.parquet
+
+TRAIN_FILES="['$gsm8k_train_path', '$math_train_path', '$codeforces_train_path']"
+TEST_FILES="['$gsm8k_test_path', '$math_test_path', '$codeforces_test_path']"
+
+TRAIN_FILES="['$gsm8k_train_path', '$codeforces_train_path']"
+TEST_FILES="['$gsm8k_test_path', '$codeforces_test_path']"
 
 ############################ Parameter Groups ############################
 
@@ -58,7 +67,8 @@ DATA=(
     data.train_batch_size=$TRAIN_PROMPT_BSZ
     data.filter_overlong_prompts=True
     data.truncation='error'
-    data.shuffle=False
+    data.shuffle=True
+    data.seed=42
 )
 
 MODEL=(
@@ -66,7 +76,7 @@ MODEL=(
     actor_rollout_ref.model.enable_gradient_checkpointing=True
     actor_rollout_ref.model.use_remove_padding=True
 )
-
+# "['openai/gsm8k', 'DigitalLearningGmbH/MATH-lighteval']"
 DISTILLATION=(
     actor_rollout_ref.distillation.enabled=True
     actor_rollout_ref.distillation.loss_mode=$DISTILLATION_LOSS_MODE
@@ -81,10 +91,10 @@ DISTILLATION=(
     actor_rollout_ref.distillation.fsdp_config.param_offload=True
     actor_rollout_ref.distillation.teacher_models.teacher0.path="${FAMILY}/${TEACHER_MODEL_MATH}"
     actor_rollout_ref.distillation.teacher_models.teacher0.use_remove_padding=True
-    actor_rollout_ref.distillation.teacher_models.teacher0.domain="math"
+    actor_rollout_ref.distillation.teacher_models.teacher0.domain='openai/gsm8k'
     actor_rollout_ref.distillation.teacher_models.teacher1.path="${FAMILY}/${TEACHER_MODEL_CODING}"
     actor_rollout_ref.distillation.teacher_models.teacher1.use_remove_padding=True
-    actor_rollout_ref.distillation.teacher_models.teacher1.domain="coding"
+    actor_rollout_ref.distillation.teacher_models.teacher1.domain='codeforces'
     actor_rollout_ref.distillation.teacher_models.num_teachers=2
     actor_rollout_ref.distillation.ulysses_sequence_parallel_size=$SP_SIZE
 )
@@ -116,7 +126,7 @@ ALGORITHM=(
 )
 
 TRAINER=(
-    trainer.logger='["console"]'
+    trainer.logger='["console","wandb"]'
     trainer.project_name=$PROJECT_NAME
     trainer.experiment_name=$EXP_NAME
     trainer.n_gpus_per_node=$WORLD_SIZE
@@ -124,7 +134,7 @@ TRAINER=(
     trainer.save_freq=200
     trainer.test_freq=5
     trainer.total_epochs=15
-    trainer.val_before_train=False
+    trainer.val_before_train=True
     trainer.use_legacy_worker_impl=disable
     trainer.resume_mode=disable
 )
