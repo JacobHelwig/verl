@@ -395,12 +395,12 @@ def prepare_ref_config(target_config: ActorConfig, actor_config: ActorConfig):
     """TODO"""
     with open_dict(target_config):
         target_config.ppo_mini_batch_size = actor_config.ppo_mini_batch_size
-        target_config.ppo_micro_batch_size = target_config.pop("log_prob_micro_batch_size", None)
+        target_config.ppo_micro_batch_size = target_config.pop("log_prob_micro_batch_size", None) or actor_config.ppo_micro_batch_size
         target_config.ppo_micro_batch_size_per_gpu = target_config.pop(
             "log_prob_micro_batch_size_per_gpu", None
-        )
+        ) or actor_config.ppo_micro_batch_size_per_gpu
         target_config.use_dynamic_bsz = target_config.pop("log_prob_use_dynamic_bsz", False)
-        target_config.ppo_max_token_len_per_gpu = target_config.pop("log_prob_max_token_len_per_gpu", None)
+        target_config.ppo_max_token_len_per_gpu = target_config.pop("log_prob_max_token_len_per_gpu", None) or actor_config.ppo_max_token_len_per_gpu
 
 
 class ActorRolloutRefWorker(Worker, DistProfilerExtension):
