@@ -1,3 +1,1021 @@
+# Activate conda in script
+
+```bash
+eval "$(conda shell.bash hook)"
+```
+
+# Install claude
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Login to claude: console.anthropic on tamu google account
+
+# Install UV
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+# Env setup
+
+```bash
+
+pip install --no-deps -e . # add verl to root w/o installing dependencies, which may cause conflicts with other packages in the environment. You can install dependencies separately if needed.
+
+/nvme-data/jacob/verl$ pytest -v # run tests to verify the installation
+```
+
+# Debug args
+
+```bash
+python3 -m verl.trainer.main_ppo \
+    actor_rollout_ref.actor.use_torch_compile=False \
+    actor_rollout_ref.actor.fsdp_config.use_torch_compile=False \
+    trainer.val_before_train=False \
+    actor_rollout_ref.rollout.enforce_eager=True \
+    actor_rollout_ref.ref.fsdp_config.use_torch_compile=False \
+    trainer.resume_mode=disable \
+    data.train_files=$DATA_PATH/gsm8k/train.parquet \
+    data.val_files=$DATA_PATH/gsm8k/test.parquet \
+    actor_rollout_ref.rollout.agent.num_workers=2 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=2 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=5 \
+    data.train_batch_size=2 \
+    trainer.logger='["console"]' \
+```
+
+# Preprocess data
+
+```bash
+DATA_DIR=$(pwd)
+export HF_HOME=$DATA_DIR
+
+python -m examples.data_preprocess.gsm8k --local_save_dir $DATA_DIR/gsm8k
+```
+
+Pre-commit:
+
+```bash
+export PATH="$CONDA_PREFIX/bin:$PATH"
+git commit -m "your commit message"
+```
+
+# Megatron + TE + Bridge install (WORKING SOLUTION on dive8)
+
+Use this approach instead of the minimal one at the top. This works because:
+1. vllm installs PyTorch with correct CUDA version
+2. cuDNN/NCCL from PyPI wheels avoid system CUDA mismatch
+3. Environment variables guide builds to use the right libraries
+4. Install megatron-bridge from GitHub (not PyPI) to get VLMLoRA support
+
+## Key Issues Solved
+
+This installation handles several common problems on HPC systems:
+- **CUDA version mismatch**: System has CUDA 13.1, but PyTorch uses 12.8
+- **Missing cuDNN headers**: Compiler can't find cudnn.h from PyTorch's bundled CUDA
+- **VLMLoRA not available**: PyPI version (0.2.0rc6) lacks VLMLoRA, need 0.3.0+ from GitHub
+- **Optional deps fail to build**: Skip mamba-ssm, causal-conv1d which require CUDA compilation
+
+## Requirements
+
+- Python 3.12
+- NVIDIA GPU with driver supporting CUDA 12.4+
+- No sudo privileges required
+- Conda/Mamba and uv package manager
+
+## Installation Steps
+
+```bash
+
+conda create -n verlMega python=3.12 -y
+conda activate verlMega
+
+echo "1. install vllm (brings PyTorch with correct CUDA version)"
+uv pip install --no-cache-dir "vllm==0.11.0"
+
+echo "2. install basic packages"
+uv pip install "transformers[hf_xet]>=4.51.0" accelerate datasets peft hf-transfer \
+    "numpy<2.0.0" "pyarrow>=15.0.0" pandas "tensordict>=0.8.0,<=0.10.0,!=0.9.0" torchdata \
+    ray[default] codetiming hydra-core pylatexenc qwen-vl-utils wandb dill pybind11 liger-kernel mathruler \
+    pytest py-spy pre-commit ruff tensorboard 
+
+echo "pyext is lack of maintainace and cannot work with python 3.12."
+echo "if you need it for prime code rewarding, please install using patched fork:"
+echo "pip install git+https://github.com/ShaohonChen/PyExt.git@py311support"
+
+uv pip install "nvidia-ml-py>=12.560.30" "fastapi[standard]>=0.115.0" "optree>=0.13.0" "pydantic>=2.9" "grpcio>=1.62.1"
+
+
+echo "3. install FlashAttention and FlashInfer"
+# Install flash-attn-2.8.1 (cxx11abi=False)
+wget -nv https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl && \
+    uv pip install --no-cache-dir flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl
+
+# python -m pip install --no-cache-dir flashinfer-python==0.3.1
+
+
+
+echo "5. May need to fix opencv"
+uv pip install opencv-python
+uv pip install opencv-fixer && \
+    python -c "from opencv_fixer import AutoFix; AutoFix()"
+
+
+
+uv pip install gpustat ipykernel ipython
+
+
+export_variable_if_exists() {
+  local VAR_NAME="$1"
+  local PATH_VALUE="$2"
+  local APPEND="${3:-false}"
+
+  if [ -d "$PATH_VALUE" ] || [ -f "$PATH_VALUE" ]; then
+    if [ "$APPEND" = "true" ]; then
+      if [ -n "${!VAR_NAME:-}" ]; then
+        export "$VAR_NAME"="${!VAR_NAME}:$PATH_VALUE"
+      else
+        export "$VAR_NAME"="$PATH_VALUE"
+      fi
+    else
+      export "$VAR_NAME"="$PATH_VALUE"
+    fi
+    echo "$VAR_NAME is set to $PATH_VALUE"
+  else
+    echo "ERROR: $VAR_NAME path not found at $PATH_VALUE" >&2
+    # exit 1
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# TransformerEngine (no-sudo HPC friendly): install NCCL/cuDNN wheels + export paths
+# -----------------------------------------------------------------------------
+echo "6. install TE deps (NCCL + cuDNN) from PyPI"
+uv pip install --no-cache-dir "nvidia-nccl-cu12" "nvidia-cudnn-cu12"
+
+# Compute roots inside this env
+NCCL_HOME="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "nccl")
+PY
+)"
+CUDNN_HOME="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "cudnn")
+PY
+)"
+
+# Export paths (headers + libs)
+export_variable_if_exists NCCL_HOME "$NCCL_HOME" false
+export_variable_if_exists CPLUS_INCLUDE_PATH "$NCCL_HOME/include" true
+export_variable_if_exists C_INCLUDE_PATH      "$NCCL_HOME/include" true
+
+if [ -d "$NCCL_HOME/lib" ]; then
+  export_variable_if_exists LIBRARY_PATH    "$NCCL_HOME/lib" true
+  export_variable_if_exists LD_LIBRARY_PATH "$NCCL_HOME/lib" true
+elif [ -d "$NCCL_HOME/lib64" ]; then
+  export_variable_if_exists LIBRARY_PATH    "$NCCL_HOME/lib64" true
+  export_variable_if_exists LD_LIBRARY_PATH "$NCCL_HOME/lib64" true
+else
+  echo "ERROR: Neither $NCCL_HOME/lib nor $NCCL_HOME/lib64 exists" >&2
+#   exit 1
+fi
+
+export_variable_if_exists CUDNN_HOME "$CUDNN_HOME" false
+export_variable_if_exists CPLUS_INCLUDE_PATH "$CUDNN_HOME/include" true
+export_variable_if_exists C_INCLUDE_PATH      "$CUDNN_HOME/include" true
+if [ -d "$CUDNN_HOME/lib" ]; then
+  export_variable_if_exists LD_LIBRARY_PATH "$CUDNN_HOME/lib" true
+elif [ -d "$CUDNN_HOME/lib64" ]; then
+  export_variable_if_exists LD_LIBRARY_PATH "$CUDNN_HOME/lib64" true
+else
+  echo "ERROR: Neither $CUDNN_HOME/lib nor $CUDNN_HOME/lib64 exists" >&2
+  exit 1
+fi
+
+# Add all NVIDIA CUDA library paths (cublas, cuda_runtime, etc.)
+echo "Adding NVIDIA CUDA library paths to LD_LIBRARY_PATH"
+NVIDIA_ROOT="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia")
+PY
+)"
+for lib_dir in "$NVIDIA_ROOT"/*/lib; do
+  if [ -d "$lib_dir" ]; then
+    export_variable_if_exists LD_LIBRARY_PATH "$lib_dir" true
+  fi
+done
+
+# Optional: helps some CMake find logic
+export_variable_if_exists CMAKE_PREFIX_PATH "$NCCL_HOME" true
+export_variable_if_exists CMAKE_PREFIX_PATH "$CUDNN_HOME" true
+
+# Sanity checks
+test -f "$NCCL_HOME/include/nccl.h" || (echo "Missing nccl.h at $NCCL_HOME/include/nccl.h" >&2; exit 1)
+python - <<'PY'
+import site, pathlib, glob
+root = pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "cudnn"
+hits = glob.glob(str(root / "**/libcudnn_graph.so*"), recursive=True)
+print("Found libcudnn_graph:", hits[:3])
+assert hits, "libcudnn_graph not found in nvidia-cudnn-cu12 install"
+PY
+
+echo "7. install TransformerEngine"
+uv pip install --no-build-isolation transformer_engine[pytorch]
+
+echo "8. verify import"
+python - <<'PY'
+import transformer_engine as te
+print("TransformerEngine import OK:", te.__version__)
+PY
+
+uv pip install --no-deps git+https://github.com/NVIDIA/Megatron-LM.git@core_v0.13.1
+
+echo "9. install Megatron-Bridge (from GitHub to get VLMLoRA support)"
+# Install megatron-bridge 0.3.0+ from GitHub (PyPI version 0.2.0rc6 lacks VLMLoRA)
+# Use --no-deps to avoid building causal-conv1d, mamba-ssm which fail with CUDA version mismatches
+echo "Installing megatron-bridge 0.3.0rc0+ from GitHub..."
+uv pip install --no-deps git+https://github.com/NVIDIA-NeMo/Megatron-Bridge.git
+
+# Install megatron-core without deps
+uv pip install --no-deps "megatron-core>=0.15.0"
+
+# Install required runtime dependencies
+echo "Installing required dependencies..."
+# nvidia-modelopt is required for megatron-bridge 0.3.0+
+uv pip install nvidia-modelopt
+# Other runtime dependencies (skip dev extras like mamba-ssm, causal-conv1d)
+uv pip install apex transformers nltk six importlib-metadata zarr tensorstore packaging
+
+echo "10. Verify megatron-bridge installation"
+python - <<'PY'
+from megatron.bridge.peft.lora import LoRA, VLMLoRA
+print("Megatron-Bridge import OK")
+print("LoRA available:", LoRA)
+print("VLMLoRA available:", VLMLoRA)
+PY
+
+echo "Successfully installed all packages (TransformerEngine + Megatron-Bridge with VLMLoRA) ✅"
+
+```
+
+## Installation Steps on dive6
+
+```bash
+
+conda create -n verlMega python=3.12 -y
+conda activate verlMega
+
+echo "1. install vllm (brings PyTorch with correct CUDA version)"
+uv pip install --no-cache-dir "vllm==0.11.0"
+
+echo "2. install basic packages"
+uv pip install "transformers[hf_xet]>=4.51.0" accelerate datasets peft hf-transfer \
+    "numpy<2.0.0" "pyarrow>=15.0.0" pandas "tensordict>=0.8.0,<=0.10.0,!=0.9.0" torchdata \
+    ray[default] codetiming hydra-core pylatexenc qwen-vl-utils wandb dill pybind11 liger-kernel mathruler \
+    pytest py-spy pre-commit ruff tensorboard 
+
+echo "pyext is lack of maintainace and cannot work with python 3.12."
+echo "if you need it for prime code rewarding, please install using patched fork:"
+echo "pip install git+https://github.com/ShaohonChen/PyExt.git@py311support"
+
+uv pip install "nvidia-ml-py>=12.560.30" "fastapi[standard]>=0.115.0" "optree>=0.13.0" "pydantic>=2.9" "grpcio>=1.62.1"
+
+
+echo "3. install FlashAttention and FlashInfer"
+# Install flash-attn-2.8.1 (cxx11abi=False)
+wget -nv https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl && \
+    uv pip install --no-cache-dir flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl
+
+# python -m pip install --no-cache-dir flashinfer-python==0.3.1
+
+
+
+echo "5. May need to fix opencv"
+uv pip install opencv-python
+uv pip install opencv-fixer && \
+    python -c "from opencv_fixer import AutoFix; AutoFix()"
+
+
+
+uv pip install gpustat ipykernel ipython
+
+
+export_variable_if_exists() {
+  local VAR_NAME="$1"
+  local PATH_VALUE="$2"
+  local APPEND="${3:-false}"
+
+  if [ -d "$PATH_VALUE" ] || [ -f "$PATH_VALUE" ]; then
+    if [ "$APPEND" = "true" ]; then
+      if [ -n "${!VAR_NAME:-}" ]; then
+        export "$VAR_NAME"="${!VAR_NAME}:$PATH_VALUE"
+      else
+        export "$VAR_NAME"="$PATH_VALUE"
+      fi
+    else
+      export "$VAR_NAME"="$PATH_VALUE"
+    fi
+    echo "$VAR_NAME is set to $PATH_VALUE"
+  else
+    echo "ERROR: $VAR_NAME path not found at $PATH_VALUE" >&2
+    # exit 1
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# dive6 only: Install CUDA toolkit headers and set up NVTX paths
+# -----------------------------------------------------------------------------
+# Required for TransformerEngine compilation on dive6 systems
+# The pip-installed cuda-runtime package is missing critical CUDA headers like crt/host_defines.h
+# This causes compilation errors: "fatal error: crt/host_defines.h: No such file or directory"
+echo "5.5. [dive6 only] install CUDA toolkit for complete headers"
+conda install -c nvidia cuda-toolkit=12.4 -y
+# Alternative: pip install nvidia-cuda-nvcc-cu12
+# If conda install fails, uncomment the line below:
+# uv pip install nvidia-cuda-nvcc-cu12
+
+# [dive6 only] Add NVTX include path for TransformerEngine compilation
+# TransformerEngine needs nvtx3/nvToolsExt.h which is in the pip-installed nvidia packages
+NVTX_INCLUDE="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "nvtx" / "include")
+PY
+)"
+export_variable_if_exists CPLUS_INCLUDE_PATH "$NVTX_INCLUDE" true
+export_variable_if_exists C_INCLUDE_PATH "$NVTX_INCLUDE" true
+
+# [dive6 only] Fix TORCH_CUDA_ARCH_LIST for RTX A6000 (compute capability 8.6)
+# The default list includes non-existent architectures (11.0, 12.0) which cause compilation errors
+# Error: "ValueError: Unknown CUDA arch (11.0) or GPU not supported"
+export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0;10.0"
+echo "TORCH_CUDA_ARCH_LIST set to: $TORCH_CUDA_ARCH_LIST"
+
+# -----------------------------------------------------------------------------
+# TransformerEngine (no-sudo HPC friendly): install NCCL/cuDNN wheels + export paths
+# -----------------------------------------------------------------------------
+echo "6. install TE deps (NCCL + cuDNN) from PyPI"
+uv pip install --no-cache-dir "nvidia-nccl-cu12" "nvidia-cudnn-cu12"
+
+# Compute roots inside this env
+NCCL_HOME="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "nccl")
+PY
+)"
+CUDNN_HOME="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "cudnn")
+PY
+)"
+
+# Export paths (headers + libs)
+export_variable_if_exists NCCL_HOME "$NCCL_HOME" false
+export_variable_if_exists CPLUS_INCLUDE_PATH "$NCCL_HOME/include" true
+export_variable_if_exists C_INCLUDE_PATH      "$NCCL_HOME/include" true
+
+if [ -d "$NCCL_HOME/lib" ]; then
+  export_variable_if_exists LIBRARY_PATH    "$NCCL_HOME/lib" true
+  export_variable_if_exists LD_LIBRARY_PATH "$NCCL_HOME/lib" true
+elif [ -d "$NCCL_HOME/lib64" ]; then
+  export_variable_if_exists LIBRARY_PATH    "$NCCL_HOME/lib64" true
+  export_variable_if_exists LD_LIBRARY_PATH "$NCCL_HOME/lib64" true
+else
+  echo "ERROR: Neither $NCCL_HOME/lib nor $NCCL_HOME/lib64 exists" >&2
+#   exit 1
+fi
+
+export_variable_if_exists CUDNN_HOME "$CUDNN_HOME" false
+export_variable_if_exists CPLUS_INCLUDE_PATH "$CUDNN_HOME/include" true
+export_variable_if_exists C_INCLUDE_PATH      "$CUDNN_HOME/include" true
+if [ -d "$CUDNN_HOME/lib" ]; then
+  export_variable_if_exists LD_LIBRARY_PATH "$CUDNN_HOME/lib" true
+elif [ -d "$CUDNN_HOME/lib64" ]; then
+  export_variable_if_exists LD_LIBRARY_PATH "$CUDNN_HOME/lib64" true
+else
+  echo "ERROR: Neither $CUDNN_HOME/lib nor $CUDNN_HOME/lib64 exists" >&2
+  exit 1
+fi
+
+# Add all NVIDIA CUDA library paths (cublas, cuda_runtime, etc.)
+echo "Adding NVIDIA CUDA library paths to LD_LIBRARY_PATH"
+NVIDIA_ROOT="$(python - <<'PY'
+import site, pathlib
+print(pathlib.Path(site.getsitepackages()[0]) / "nvidia")
+PY
+)"
+for lib_dir in "$NVIDIA_ROOT"/*/lib; do
+  if [ -d "$lib_dir" ]; then
+    export_variable_if_exists LD_LIBRARY_PATH "$lib_dir" true
+  fi
+done
+
+# Optional: helps some CMake find logic
+export_variable_if_exists CMAKE_PREFIX_PATH "$NCCL_HOME" true
+export_variable_if_exists CMAKE_PREFIX_PATH "$CUDNN_HOME" true
+
+# Sanity checks
+test -f "$NCCL_HOME/include/nccl.h" || (echo "Missing nccl.h at $NCCL_HOME/include/nccl.h" >&2; exit 1)
+python - <<'PY'
+import site, pathlib, glob
+root = pathlib.Path(site.getsitepackages()[0]) / "nvidia" / "cudnn"
+hits = glob.glob(str(root / "**/libcudnn_graph.so*"), recursive=True)
+print("Found libcudnn_graph:", hits[:3])
+assert hits, "libcudnn_graph not found in nvidia-cudnn-cu12 install"
+PY
+
+echo "7. install TransformerEngine"
+uv pip install --no-build-isolation transformer_engine[pytorch]
+
+echo "8. verify import"
+python - <<'PY'
+import transformer_engine as te
+print("TransformerEngine import OK:", te.__version__)
+PY
+
+uv pip install --no-deps git+https://github.com/NVIDIA/Megatron-LM.git@core_v0.13.1
+
+echo "9. install Megatron-Bridge (from GitHub to get VLMLoRA support)"
+# Install megatron-bridge from GitHub (PyPI version 0.2.0rc6 lacks VLMLoRA)
+# Use --no-deps to avoid building causal-conv1d, mamba-ssm which fail with CUDA version mismatches
+# Pin to commit 953aabf for compatibility with megatron-core 0.15.x
+echo "Installing megatron-bridge from GitHub..."
+uv pip install --no-deps git+https://github.com/NVIDIA-NeMo/Megatron-Bridge.git@953aabf75c0500180dc14a6a76cf9e7e7c4baec7
+
+# Install megatron-core without deps
+uv pip install --no-deps "megatron-core>=0.15.0"
+
+# Install required runtime dependencies
+echo "Installing required dependencies..."
+# nvidia-modelopt is required for megatron-bridge 0.3.0+
+uv pip install nvidia-modelopt
+# Other runtime dependencies (skip dev extras like mamba-ssm, causal-conv1d)
+uv pip install apex transformers nltk six importlib-metadata zarr tensorstore packaging
+
+
+uv pip install transformers==4.57.6
+python -m pip install "numpy<2"
+
+echo "10. Verify megatron-bridge installation"
+python - <<'PY'
+from megatron.bridge.peft.lora import LoRA, VLMLoRA
+print("Megatron-Bridge import OK")
+print("LoRA available:", LoRA)
+print("VLMLoRA available:", VLMLoRA)
+PY
+
+echo "Successfully installed all packages (TransformerEngine + Megatron-Bridge with VLMLoRA) ✅"
+
+```
+
+# Megatron train script
+
+```bash
+#!/usr/bin/env bash
+set -xeuo pipefail
+
+# Need to install Megatron-Bridge
+# NOTE: Make sure you use Megatron-Bridge later than 0.2.0 
+# (Recommend https://github.com/NVIDIA-NeMo/Megatron-Bridge/commit/953aabf75c0500180dc14a6a76cf9e7e7c4baec7 or later)
+# for proper MoE LoRA support.
+
+# For Megatron communication/computation overlapping
+export CUDA_DEVICE_MAX_CONNECTIONS=1
+
+export PATH=$CONDA_PREFIX/bin:$PATH
+export CUDA_VISIBLE_DEVICES=8,9
+export NCCL_P2P_DISABLE=1
+PROJECT_PATH=$PWD
+DATA_PATH=$PROJECT_PATH/../verlData
+
+############################ Quick Config ############################
+
+rollout_name="vllm" # sglang or vllm
+project_name='verl_grpo_example_gsm8k_math'
+exp_name='qwen2_7b_megatron_lora'
+
+adv_estimator=grpo
+
+max_prompt_length=1024
+max_response_length=1024
+train_prompt_bsz=2
+
+############################ Paths ############################
+
+gsm8k_train_path=$DATA_PATH/gsm8k/train.parquet
+gsm8k_test_path=$DATA_PATH/gsm8k/test.parquet
+
+train_files="['$gsm8k_train_path']"
+test_files="['$gsm8k_test_path']"
+
+############################ Parameter Groups ############################
+
+DATA=(
+    data.train_files="$train_files"
+    data.val_files="$test_files"
+    data.max_prompt_length=$max_prompt_length
+    data.max_response_length=$max_response_length
+    data.train_batch_size=$train_prompt_bsz
+    data.filter_overlong_prompts=True
+    data.truncation='error'
+    data.shuffle=False
+)
+
+MODEL=(
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct
+    actor_rollout_ref.model.lora.rank=64
+    actor_rollout_ref.model.lora.alpha=32
+    actor_rollout_ref.model.lora.lora_A_init_method=kaiming
+    # # Optional: Use canonical LoRA
+    # actor_rollout_ref.model.lora.type="canonical_lora"
+    # actor_rollout_ref.model.lora.target_modules='["linear_q","linear_k","linear_v","linear_proj","linear_fc1_up","linear_fc1_gate","linear_fc2"]'
+
+    # # Optional: Add dropout to LoRA layers
+    # actor_rollout_ref.model.lora.dropout=0.05
+    # actor_rollout_ref.model.lora.dropout_position=pre
+)
+
+ACTOR=(
+    actor_rollout_ref.actor.optim.lr=1e-6
+    actor_rollout_ref.actor.ppo_mini_batch_size=2
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=5
+    actor_rollout_ref.actor.use_dynamic_bsz=True
+    actor_rollout_ref.actor.megatron.use_mbridge=True
+    actor_rollout_ref.actor.megatron.vanilla_mbridge=False
+    actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=1
+    actor_rollout_ref.actor.megatron.tensor_model_parallel_size=1
+    actor_rollout_ref.actor.megatron.sequence_parallel=False
+    actor_rollout_ref.actor.use_kl_loss=True
+    actor_rollout_ref.actor.kl_loss_coef=0.001
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl
+    actor_rollout_ref.actor.entropy_coeff=0
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_method=uniform
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_granularity=full
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_num_layers=1
+)
+
+ROLLOUT=(
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=5
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1
+    actor_rollout_ref.rollout.name=$rollout_name
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6
+    actor_rollout_ref.rollout.n=4
+)
+
+REF=(
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=5
+    actor_rollout_ref.ref.megatron.pipeline_model_parallel_size=1
+    actor_rollout_ref.ref.megatron.tensor_model_parallel_size=1
+    actor_rollout_ref.ref.megatron.sequence_parallel=False
+)
+
+ALGORITHM=(
+    algorithm.adv_estimator=$adv_estimator
+    algorithm.use_kl_in_reward=False
+)
+
+TRAINER=(
+    trainer.logger='["console"]'
+    trainer.project_name=$project_name
+    trainer.experiment_name=$exp_name
+    trainer.n_gpus_per_node=1
+    trainer.nnodes=1
+    trainer.save_freq=20
+    trainer.test_freq=5
+    trainer.total_epochs=15
+    trainer.val_before_train=False
+    trainer.use_legacy_worker_impl=disable
+)
+
+############################ Launch ############################
+
+python3 -m verl.trainer.main_ppo \
+    --config-path=config \
+    --config-name='ppo_megatron_trainer.yaml' \
+    "${DATA[@]}" \
+    "${ALGORITHM[@]}" \
+    "${MODEL[@]}" \
+    "${ROLLOUT[@]}" \
+    "${ACTOR[@]}" \
+    "${REF[@]}" \
+    "${TRAINER[@]}" \
+    "$@"
+
+
+```
+
+# FSDP train script
+
+```bash
+set -x
+
+export PATH=$CONDA_PREFIX/bin:$PATH
+export CUDA_VISIBLE_DEVICES=8,9
+export NCCL_P2P_DISABLE=1
+PROJECT_PATH=$PWD
+DATA_PATH=$PROJECT_PATH/../verlData
+
+python3 -m verl.trainer.main_ppo \
+    trainer.resume_mode=disable \
+    data.train_files=$DATA_PATH/gsm8k/train.parquet \
+    data.val_files=$DATA_PATH/gsm8k/test.parquet \
+    actor_rollout_ref.rollout.agent.num_workers=2 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=2 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=5 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=5 \
+    data.train_batch_size=2 \
+    trainer.logger='["console"]' \
+    algorithm.adv_estimator=grpo \
+    trainer.val_before_train=False \
+    data.max_prompt_length=512 \
+    data.max_response_length=1024 \
+    data.filter_overlong_prompts=True \
+    data.truncation='error' \
+    data.shuffle=False \
+    actor_rollout_ref.model.lora_rank=64 \
+    actor_rollout_ref.model.lora_alpha=32 \
+    actor_rollout_ref.actor.optim.lr=3e-6 \
+    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_coef=0.001 \
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+    actor_rollout_ref.actor.entropy_coeff=0 \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.load_format=safetensors \
+    actor_rollout_ref.rollout.layered_summon=True \
+    actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    algorithm.use_kl_in_reward=False \
+    trainer.critic_warmup=0 \
+    trainer.project_name='verl_grpo_example_gsm8k' \
+    trainer.experiment_name='qwen2.5_3b_grpo_lora' \
+    trainer.n_gpus_per_node=2 \
+    trainer.nnodes=1 \
+    trainer.save_freq=20 \
+    trainer.test_freq=5 \
+    trainer.total_epochs=15 $@
+
+    # actor_rollout_ref.actor.ppo_mini_batch_size=256 \
+    # data.train_batch_size=1024 \
+    # trainer.n_gpus_per_node=8 \
+    # actor_rollout_ref.model.use_shm=True \
+
+```
+
+# Doc string instructions
+
+```md
+# Docstring Instructions for On-Policy Distillation
+
+## Overview
+Add comprehensive docstrings to all functions and classes in the on-policy distillation PR, following the format from `compute_policy_loss_vanilla` in `verl/trainer/ppo/core_algos.py:1160`.
+
+This includes:
+- Adding docstrings to new functions/classes that lack them
+- Fixing existing docstrings that are incomplete, inaccurate, or don't follow the standard format
+- Ensuring all tensor parameters include shape information
+- Fixing any bugs discovered in the code (e.g., undefined variables)
+
+## Finding What Needs Documentation
+
+### Step 1: Identify Files Changed in the PR
+
+Use git diff to find all Python files modified in your branch:
+
+```bash
+# See all changed files compared to main branch
+git diff --name-only main...HEAD | grep "\.py$"
+
+# Or if you want to see which functions were added/modified
+git diff main...HEAD --stat
+```
+
+
+### Step 2: Find New or Modified Functions
+
+Use git diff to see the actual changes and identify new functions:
+
+```bash
+# See full diff of a specific file
+git diff main...HEAD verl/trainer/distillation/losses.py
+
+# Filter to show only function definitions added
+git diff main...HEAD verl/trainer/distillation/losses.py | grep "^+def "
+```
+
+Look for:
+- Lines starting with `+def` (new functions)
+- Lines starting with `+class` (new classes)
+- Existing functions with modified signatures or docstrings
+
+### Step 3: Review Each Function/Class
+
+For each function or class you find, check:
+
+1. **Does it have a docstring at all?**
+   - Look for TODO placeholders
+   - Look for single-line summaries without Args/Returns
+   - Look for completely missing docstrings
+
+2. **Is the existing docstring complete?**
+   - Does it have an Args section for all parameters?
+   - Does it have a Returns section?
+   - For classes, does it have an Attributes section?
+
+3. **Is the docstring accurate?**
+   - Do the parameter names match the function signature?
+   - Are shapes documented correctly?
+   - Are optional parameters marked as such?
+
+4. **Does it follow the standard format?**
+   - Compare against `compute_policy_loss_vanilla` in `verl/trainer/ppo/core_algos.py:1160`
+   - Check Args formatting: `param_name (Type):` not `param_name: \`(Type)\``
+   - Check for proper indentation
+
+5. **Are there any bugs in the code?**
+   - Look for undefined variables
+   - Look for parameter mismatches (e.g., using wrong variable names)
+
+### Step 4: Systematic Review Process
+
+For each file, go through line by line:
+
+```bash
+# Read a specific file and look at line numbers
+cat -n verl/trainer/distillation/losses.py
+
+# Or use grep to find all function definitions
+grep -n "^def \|^class " verl/trainer/distillation/losses.py
+```
+
+Create a checklist of functions/classes that need work, noting:
+- Line number
+- Function/class name
+- What needs to be fixed (missing docstring, incomplete Args, formatting issues, etc.)
+
+### Common Issues to Look For
+
+1. **TODO placeholders**: Search for `TODO` in docstrings
+2. **Single-line docstrings**: Functions with only a summary, no Args/Returns
+3. **Duplicate Args entries**: Same parameter documented twice
+4. **Missing Returns section**: Functions that return values but don't document them
+5. **Incorrect formatting**: Using backticks instead of parentheses for types
+6. **Missing shape information**: Tensor parameters without shape docs
+7. **Missing optional markers**: Optional params not marked as `(Type, optional)`
+8. **Code bugs**: Variables used before definition, mismatched parameter names
+
+### Example Git Diff Analysis
+
+```bash
+$ git diff main...HEAD verl/trainer/distillation/losses.py | head -50
+
+# You might see:
++def compute_distillation_loss_kl_estimator(
++    teacher_log_probs: torch.Tensor,
++    student_log_probs: torch.Tensor,
++    ...
++):
++    """Compute the distillation loss and related metrics using KL estimator"""
++    assert config is not None
++    log_p, log_q = clamp_log_probs(log_p, log_q)  # BUG: undefined variables!
+```
+
+This reveals:
+1. New function `compute_distillation_loss_kl_estimator`
+2. Has a single-line docstring (incomplete)
+3. Has a bug on line with `clamp_log_probs` (uses undefined `log_p, log_q`)
+
+## Reference Format
+
+The standard docstring format used in this codebase (see `compute_policy_loss_vanilla` at verl/trainer/ppo/core_algos.py:1160):
+
+```python
+def function_name(param1: Type1, param2: Type2, ...) -> ReturnType:
+    """
+    One-line summary of what the function does.
+
+    (Optional) Additional context, source references, or background information.
+    Can span multiple lines if needed.
+
+    Args:
+        param1 (Type1):
+            Description of param1, including shape information if applicable.
+        param2 (Type2):
+            Description of param2, including shape information if applicable.
+        optional_param (Type, optional):
+            Description of optional parameter. Defaults to value.
+        config: `(ConfigType)`:
+            Description of config parameter.
+
+    Returns:
+        ReturnType: Description of return value, including shape information if applicable.
+        For tuple returns: tuple[Type1, Type2]: Description of tuple elements.
+    """
+```
+
+### Key Format Requirements
+
+1. **Summary**: One clear line describing the function's purpose
+2. **Additional context** (optional): References, formulas, background info
+3. **Args section**:
+   - Format: `param_name (Type):` or `param_name (Type, optional):`
+   - Indent description under the parameter
+   - Include tensor shapes: `shape (batch_size, seq_length, vocab_size)`
+   - Note default values for optional parameters
+   - Config parameters can use backtick style: `config: \`(ConfigType)\`:`
+4. **Returns section**:
+   - Format: `ReturnType: Description`
+   - For tuples, list each element with indentation
+   - Include shape information for tensors
+5. **Attributes section** (for classes):
+   - Format: `attribute_name (Type):`
+   - Describe purpose and any computed/derived attributes
+
+## Examples
+
+### Good Example: Function with Tensor Parameters
+
+```python
+def topk_logprobs_from_logits(
+    logits: torch.Tensor, k: int, compute_topk: bool, gather_topk: bool, topk_indices: Optional[torch.Tensor] = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute and/or gather top-k log probabilities from logits.
+
+    This function supports two modes:
+    1. Computing new top-k log probabilities from logits
+    2. Gathering log probabilities at pre-specified indices
+    Both modes can be combined to gather from both teacher and student top-k indices.
+
+    Args:
+        logits (torch.Tensor):
+            Logits from model forward pass, shape (*, vocab_size).
+        k (int):
+            Number of top log probabilities to compute or gather.
+        compute_topk (bool):
+            Whether to compute top-k log probabilities from the logits.
+        gather_topk (bool):
+            Whether to gather log probabilities at indices specified by topk_indices.
+        topk_indices (torch.Tensor, optional):
+            Pre-computed indices for gathering log probabilities, shape (*, k) or (*, 2*k).
+            Required when gather_topk is True. Defaults to None.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+            - topk_logprobs: Top-k log probabilities, shape (*, k) or (*, 2*k).
+            - topk_indices: Indices corresponding to the top-k log probabilities, same shape as topk_logprobs.
+    """
+```
+
+### Good Example: Class with Attributes
+
+```python
+@dataclass
+class DistillationLossInfo:
+    """
+    Information about a distillation loss function to be registered.
+
+    Attributes:
+        names (list[str] | str):
+            Name(s) of the distillation loss function. Can be a single name or list of aliases.
+        use_student_topk (bool):
+            Whether the loss function requires student top-k log probabilities. Defaults to False.
+        use_teacher_topk (bool):
+            Whether the loss function requires teacher top-k log probabilities. Defaults to False.
+        use_full (bool):
+            Whether the loss function requires full vocabulary log probabilities. Defaults to False.
+        use_topk (bool):
+            Computed attribute indicating whether any top-k log probabilities are needed.
+            Set automatically in __post_init__ based on use_student_topk or use_teacher_topk.
+    """
+    names: list[str] | str
+    use_student_topk: bool = False
+    use_teacher_topk: bool = False
+    use_full: bool = False
+```
+
+## Tips
+
+- Always include shape information for tensor parameters
+- Use `(*, dim)` notation when shapes are flexible
+- Document what each stage does in functions that handle multiple stages
+- Explain formulas and algorithms when relevant
+- Add references to papers or external documentation when applicable
+- For config parameters, use the backtick style: `config: \`(ConfigType)\``
+- Mark optional parameters and include their default values
+- For tuple returns, list each element on a separate indented line
+
+## Fixing Existing Docstrings
+
+Not all docstrings need to be written from scratch. Many functions already have partial or incorrectly formatted docstrings that need to be fixed:
+
+### Common Fixes Needed
+
+1. **Formatting Fixes**
+   ```python
+   # WRONG:
+   Args:
+       name: `(str)`
+           The name of the loss function.
+
+   # CORRECT:
+   Args:
+       name (str):
+           The name of the loss function.
+   ```
+
+2. **Missing Returns Section**
+   ```python
+   # INCOMPLETE:
+   def register_loss(info):
+       """Register a loss function.
+
+       Args:
+           info: Loss information.
+       """
+
+   # COMPLETE:
+   def register_loss(info):
+       """Register a loss function.
+
+       Args:
+           info: Loss information.
+
+       Returns:
+           function: Decorator function that registers the loss.
+       """
+   ```
+
+3. **Duplicate Args Entries**
+   ```python
+   # WRONG (response_mask listed twice):
+   Args:
+       response_mask (torch.Tensor):
+           Mask for tokens.
+       config (Config):
+           Configuration.
+       response_mask (torch.Tensor):
+           Mask for tokens.
+
+   # CORRECT:
+   Args:
+       response_mask (torch.Tensor):
+           Mask for tokens.
+       config (Config):
+           Configuration.
+   ```
+
+4. **Missing Shape Information**
+   ```python
+   # INCOMPLETE:
+   Args:
+       logits (torch.Tensor):
+           Model logits.
+
+   # COMPLETE:
+   Args:
+       logits (torch.Tensor):
+           Model logits, shape (batch_size, sequence_length, vocab_size).
+   ```
+
+5. **Inaccurate Descriptions**
+   - Parameter names in docstring don't match actual function parameters
+   - Descriptions don't accurately reflect what the code does
+   - Missing information about special behavior (e.g., duplicate handling)
+
+### Fixing Code Bugs Found During Documentation
+
+While documenting, you may discover bugs in the code itself:
+
+```python
+# BUG: Using undefined variables
+def compute_loss(teacher_log_probs, student_log_probs):
+    """Compute loss..."""
+    log_p, log_q = clamp_log_probs(log_p, log_q)  # log_p and log_q undefined!
+
+# FIX: Use the actual parameter names
+def compute_loss(teacher_log_probs, student_log_probs):
+    """Compute loss..."""
+    log_p, log_q = clamp_log_probs(teacher_log_probs, student_log_probs)
+```
+
+**Always fix these bugs when you find them** - documenting broken code doesn't help anyone!
+
+
+```
+
 <div align="center">
  👋 Hi, everyone!
     verl is a RL training library initiated by <b>ByteDance Seed team</b> and maintained by the verl community.
