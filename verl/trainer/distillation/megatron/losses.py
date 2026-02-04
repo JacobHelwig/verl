@@ -18,7 +18,7 @@ from typing import Optional
 import torch
 
 from verl.trainer.distillation.megatron.utils import vocab_parallel_log_softmax
-from verl.workers.config import DistillationConfig
+from verl.workers.config import DistillationConfig, DistillationLossConfig
 
 
 class _VocabParallelKLDivergence(torch.autograd.Function):
@@ -191,6 +191,7 @@ def compute_forward_kl_topk(
     config: DistillationConfig,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute forward KL distillation loss using top-k log probabilities."""
+    loss_config: DistillationLossConfig = config.distillation_loss
     return _VocabParallelKLDivergence.apply(
-        student_logits, teacher_topk_log_probs, teacher_topk_indices, config.log_prob_min_clamp
+        student_logits, teacher_topk_log_probs, teacher_topk_indices, loss_config.log_prob_min_clamp
     )

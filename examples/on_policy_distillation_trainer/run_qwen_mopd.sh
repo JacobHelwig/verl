@@ -4,7 +4,7 @@ conda activate verl
 export PATH=$CONDA_PREFIX/bin:$PATH
 export NCCL_P2P_DISABLE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=5,6
+export CUDA_VISIBLE_DEVICES=2,3,4,5
 export DATA_PATH=$PWD/../verlData
 export HF_HOME=$DATA_PATH
 export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
@@ -16,7 +16,7 @@ set -xeuo pipefail
 ROLLOUT_NAME="vllm" # sglang or vllm
 
 FAMILY="Qwen"
-STUDENT_MODEL=Qwen2.5-0.5B
+STUDENT_MODEL=Qwen2.5-1.5B
 TEACHER_MODEL_MATH=Qwen2.5-Math-1.5B-Instruct
 TEACHER_MODEL_CODING=Qwen2.5-Coder-1.5B-Instruct
 
@@ -41,7 +41,8 @@ TEACHER_MICRO_BATCH_SIZE_PER_GPU=1
 TEACHER_MAX_TOKEN_LEN_PER_GPU=$(( TEACHER_MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
 USE_DYNAMIC_BSZ=False
 
-WORLD_SIZE=2
+ACTOR_ROLLOUT_REF_WORLD_SIZE=2
+TEACHER_WORLD_SIZE=2
 SP_SIZE=1
 
 ############################ Paths ############################
@@ -83,6 +84,9 @@ MODEL=(
 # "['openai/gsm8k', 'DigitalLearningGmbH/MATH-lighteval']"
 DISTILLATION=(
     actor_rollout_ref.distillation.enabled=True
+    actor_rollout_ref.distillation.enable_resource_pool=True
+    actor_rollout_ref.distillation.nnodes=1
+    actor_rollout_ref.distillation.n_gpus_per_node=$TEACHER_WORLD_SIZE
     actor_rollout_ref.distillation.log_prob_use_dynamic_bsz=$USE_DYNAMIC_BSZ
     actor_rollout_ref.distillation.log_prob_micro_batch_size_per_gpu=$TEACHER_MICRO_BATCH_SIZE_PER_GPU
     actor_rollout_ref.distillation.log_prob_max_token_len_per_gpu=$TEACHER_MAX_TOKEN_LEN_PER_GPU
@@ -98,9 +102,11 @@ DISTILLATION=(
     actor_rollout_ref.distillation.teacher_models.teacher0.path="${FAMILY}/${TEACHER_MODEL_MATH}"
     actor_rollout_ref.distillation.teacher_models.teacher0.use_remove_padding=True
     actor_rollout_ref.distillation.teacher_models.teacher0.domain='openai/gsm8k'
+    actor_rollout_ref.distillation.teacher_models.teacher0.num_gpus_per_node=1
     actor_rollout_ref.distillation.teacher_models.teacher1.path="${FAMILY}/${TEACHER_MODEL_CODING}"
     actor_rollout_ref.distillation.teacher_models.teacher1.use_remove_padding=True
     actor_rollout_ref.distillation.teacher_models.teacher1.domain='codeforces'
+    actor_rollout_ref.distillation.teacher_models.teacher1.num_gpus_per_node=1
 )
 
 ACTOR=(
@@ -130,10 +136,10 @@ ALGORITHM=(
 )
 
 TRAINER=(
-    trainer.logger='["console"]'
+    trainer.logger='["console","wandb"]'
     trainer.project_name=$PROJECT_NAME
     trainer.experiment_name=$EXP_NAME
-    trainer.n_gpus_per_node=$WORLD_SIZE
+    trainer.n_gpus_per_node=$ACTOR_ROLLOUT_REF_WORLD_SIZE
     trainer.nnodes=1
     trainer.save_freq=200
     trainer.test_freq=5
