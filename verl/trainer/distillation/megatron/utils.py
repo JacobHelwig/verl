@@ -15,7 +15,7 @@
 
 import torch
 
-from verl.workers.config import DistillationConfig
+from verl.workers.config import DistillationConfig, DistillationLossConfig
 
 
 def vocab_parallel_log_softmax(
@@ -72,7 +72,8 @@ def compute_topk_log_probs(
     )
 
     # Compute local top-k
-    local_topk_log_probs, local_topk_indices = log_probs.topk(k=config.topk, dim=-1)
+    loss_config: DistillationLossConfig = config.distillation_loss
+    local_topk_log_probs, local_topk_indices = log_probs.topk(k=loss_config.topk, dim=-1)
     local_topk_indices += vocab_start_index
 
     # Gather all top-k from all partitions
@@ -83,7 +84,7 @@ def compute_topk_log_probs(
     # Compute top-k over all partitions
     gathered_topk_log_probs = torch.cat([v[0] for v in vocab_shards], dim=-1)
     gathered_topk_indices = torch.cat([v[1] for v in vocab_shards], dim=-1)
-    global_topk_log_probs, topk_indices_indices = gathered_topk_log_probs.topk(k=config.topk, dim=-1)
+    global_topk_log_probs, topk_indices_indices = gathered_topk_log_probs.topk(k=loss_config.topk, dim=-1)
     global_topk_indices = torch.gather(gathered_topk_indices, dim=-1, index=topk_indices_indices)
 
     return global_topk_log_probs, global_topk_indices

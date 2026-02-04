@@ -2,9 +2,9 @@
 eval "$(conda shell.bash hook)"
 conda activate verl
 export PATH=$CONDA_PREFIX/bin:$PATH
-# export NCCL_P2P_DISABLE=1
+export NCCL_P2P_DISABLE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=6,7
+export CUDA_VISIBLE_DEVICES=5,6
 export DATA_PATH=$PWD/../verlData
 export HF_HOME=$DATA_PATH
 export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
@@ -19,6 +19,9 @@ FAMILY="Qwen"
 STUDENT_MODEL=Qwen2.5-0.5B
 TEACHER_MODEL_MATH=Qwen2.5-Math-1.5B-Instruct
 TEACHER_MODEL_CODING=Qwen2.5-Coder-1.5B-Instruct
+
+TEACHER_MODEL_MATH=Qwen2.5-0.5B-Instruct
+TEACHER_MODEL_CODING=Qwen2.5-0.5B-Instruct
 
 # DISTILLATION_LOSS_MODE="k3"
 DISTILLATION_LOSS_MODE="forward_kl_topk"
@@ -80,24 +83,24 @@ MODEL=(
 # "['openai/gsm8k', 'DigitalLearningGmbH/MATH-lighteval']"
 DISTILLATION=(
     actor_rollout_ref.distillation.enabled=True
-    actor_rollout_ref.distillation.loss_mode=$DISTILLATION_LOSS_MODE
-    actor_rollout_ref.distillation.jsd_beta=0.5
-    actor_rollout_ref.distillation.topk=64
-    actor_rollout_ref.distillation.use_policy_loss=False
-    actor_rollout_ref.distillation.loss_max_clamp=$DISTILLATION_LOSS_MAX_CLAMP
-    actor_rollout_ref.distillation.log_prob_min_clamp=$DISTILLATION_LOG_PROB_MIN_CLAMP
     actor_rollout_ref.distillation.log_prob_use_dynamic_bsz=$USE_DYNAMIC_BSZ
     actor_rollout_ref.distillation.log_prob_micro_batch_size_per_gpu=$TEACHER_MICRO_BATCH_SIZE_PER_GPU
     actor_rollout_ref.distillation.log_prob_max_token_len_per_gpu=$TEACHER_MAX_TOKEN_LEN_PER_GPU
+    actor_rollout_ref.distillation.ulysses_sequence_parallel_size=$SP_SIZE
     actor_rollout_ref.distillation.fsdp_config.param_offload=True
+    actor_rollout_ref.distillation.distillation_loss.loss_mode=$DISTILLATION_LOSS_MODE
+    actor_rollout_ref.distillation.distillation_loss.jsd_beta=0.5
+    actor_rollout_ref.distillation.distillation_loss.topk=64
+    actor_rollout_ref.distillation.distillation_loss.use_policy_loss=False
+    actor_rollout_ref.distillation.distillation_loss.loss_max_clamp=$DISTILLATION_LOSS_MAX_CLAMP
+    actor_rollout_ref.distillation.distillation_loss.log_prob_min_clamp=$DISTILLATION_LOG_PROB_MIN_CLAMP
+    actor_rollout_ref.distillation.teacher_models.num_teachers=2
     actor_rollout_ref.distillation.teacher_models.teacher0.path="${FAMILY}/${TEACHER_MODEL_MATH}"
     actor_rollout_ref.distillation.teacher_models.teacher0.use_remove_padding=True
     actor_rollout_ref.distillation.teacher_models.teacher0.domain='openai/gsm8k'
     actor_rollout_ref.distillation.teacher_models.teacher1.path="${FAMILY}/${TEACHER_MODEL_CODING}"
     actor_rollout_ref.distillation.teacher_models.teacher1.use_remove_padding=True
     actor_rollout_ref.distillation.teacher_models.teacher1.domain='codeforces'
-    actor_rollout_ref.distillation.teacher_models.num_teachers=2
-    actor_rollout_ref.distillation.ulysses_sequence_parallel_size=$SP_SIZE
 )
 
 ACTOR=(
@@ -127,7 +130,7 @@ ALGORITHM=(
 )
 
 TRAINER=(
-    trainer.logger='["console","wandb"]'
+    trainer.logger='["console"]'
     trainer.project_name=$PROJECT_NAME
     trainer.experiment_name=$EXP_NAME
     trainer.n_gpus_per_node=$WORLD_SIZE

@@ -82,17 +82,9 @@ MODEL=(
 
 DISTILLATION=(
     actor_rollout_ref.distillation.enabled=True
-    actor_rollout_ref.distillation.loss_mode=$DISTILLATION_LOSS_MODE
-    actor_rollout_ref.distillation.jsd_beta=0.5
-    actor_rollout_ref.distillation.topk=64
-    actor_rollout_ref.distillation.use_policy_loss=False
-    actor_rollout_ref.distillation.loss_max_clamp=$DISTILLATION_LOSS_MAX_CLAMP
-    actor_rollout_ref.distillation.log_prob_min_clamp=$DISTILLATION_LOG_PROB_MIN_CLAMP
     actor_rollout_ref.distillation.log_prob_use_dynamic_bsz=True
     actor_rollout_ref.distillation.log_prob_micro_batch_size_per_gpu=$TEACHER_MICRO_BATCH_SIZE_PER_GPU
     actor_rollout_ref.distillation.log_prob_max_token_len_per_gpu=$TEACHER_MAX_TOKEN_LEN_PER_GPU
-    actor_rollout_ref.distillation.teacher_model.path="${FAMILY}/${TEACHER_MODEL}"
-    actor_rollout_ref.distillation.teacher_model.use_remove_padding=True
     actor_rollout_ref.distillation.megatron.use_remove_padding=True
     actor_rollout_ref.distillation.megatron.tensor_model_parallel_size=${TP}
     actor_rollout_ref.distillation.megatron.pipeline_model_parallel_size=${PP}
@@ -100,6 +92,14 @@ DISTILLATION=(
     actor_rollout_ref.distillation.megatron.context_parallel_size=${CP}
     actor_rollout_ref.distillation.megatron.expert_tensor_parallel_size=${ETP}
     actor_rollout_ref.distillation.megatron.param_offload=${PARAM_OFFLOAD}
+    actor_rollout_ref.distillation.distillation_loss.loss_mode=$DISTILLATION_LOSS_MODE
+    actor_rollout_ref.distillation.distillation_loss.jsd_beta=0.5
+    actor_rollout_ref.distillation.distillation_loss.topk=64
+    actor_rollout_ref.distillation.distillation_loss.use_policy_loss=False
+    actor_rollout_ref.distillation.distillation_loss.loss_max_clamp=$DISTILLATION_LOSS_MAX_CLAMP
+    actor_rollout_ref.distillation.distillation_loss.log_prob_min_clamp=$DISTILLATION_LOG_PROB_MIN_CLAMP
+    actor_rollout_ref.distillation.teacher_models.teacher0.path="${FAMILY}/${TEACHER_MODEL}"
+    actor_rollout_ref.distillation.teacher_models.teacher0.use_remove_padding=True
 )
 
 ACTOR=(
