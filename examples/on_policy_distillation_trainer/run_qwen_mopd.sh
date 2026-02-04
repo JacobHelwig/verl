@@ -4,7 +4,7 @@ conda activate verl
 export PATH=$CONDA_PREFIX/bin:$PATH
 export NCCL_P2P_DISABLE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=2,3,4,5
+export CUDA_VISIBLE_DEVICES=1,2,3,4,5,6
 export DATA_PATH=$PWD/../verlData
 export HF_HOME=$DATA_PATH
 export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
@@ -16,12 +16,9 @@ set -xeuo pipefail
 ROLLOUT_NAME="vllm" # sglang or vllm
 
 FAMILY="Qwen"
-STUDENT_MODEL=Qwen2.5-1.5B
+STUDENT_MODEL=Qwen2.5-1.5B-Instruct
 TEACHER_MODEL_MATH=Qwen2.5-Math-1.5B-Instruct
 TEACHER_MODEL_CODING=Qwen2.5-Coder-1.5B-Instruct
-
-TEACHER_MODEL_MATH=Qwen2.5-0.5B-Instruct
-TEACHER_MODEL_CODING=Qwen2.5-0.5B-Instruct
 
 # DISTILLATION_LOSS_MODE="k3"
 DISTILLATION_LOSS_MODE="forward_kl_topk"
@@ -41,7 +38,7 @@ TEACHER_MICRO_BATCH_SIZE_PER_GPU=1
 TEACHER_MAX_TOKEN_LEN_PER_GPU=$(( TEACHER_MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
 USE_DYNAMIC_BSZ=False
 
-ACTOR_ROLLOUT_REF_WORLD_SIZE=2
+ACTOR_ROLLOUT_REF_WORLD_SIZE=4
 TEACHER_WORLD_SIZE=2
 SP_SIZE=1
 
@@ -80,6 +77,16 @@ MODEL=(
     actor_rollout_ref.model.path="${FAMILY}/${STUDENT_MODEL}"
     actor_rollout_ref.model.enable_gradient_checkpointing=True
     actor_rollout_ref.model.use_remove_padding=True
+    actor_rollout_ref.model.lora_rank=256
+    actor_rollout_ref.model.lora_alpha=512
+    # actor_rollout_ref.model.lora.lora_A_init_method=kaiming
+    # # Optional: Use canonical LoRA
+    # actor_rollout_ref.model.lora.type="canonical_lora"
+    # actor_rollout_ref.model.lora.target_modules='["linear_q","linear_k","linear_v","linear_proj","linear_fc1_up","linear_fc1_gate","linear_fc2"]'
+
+    # # Optional: Add dropout to LoRA layers
+    # actor_rollout_ref.model.lora.dropout=0.05
+    # actor_rollout_ref.model.lora.dropout_position=pre
 )
 # "['openai/gsm8k', 'DigitalLearningGmbH/MATH-lighteval']"
 DISTILLATION=(
