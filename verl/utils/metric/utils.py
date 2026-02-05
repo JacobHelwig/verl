@@ -138,9 +138,13 @@ class Metric:
     @classmethod
     def aggregate_dp(cls, metric_lists: list["Metric"]) -> float:
         value_lists = [ml.values for ml in metric_lists]
-        if not [len(ls) == len(value_lists[0]) for ls in value_lists]:
+        if not metric_lists:
+            raise ValueError("Cannot aggregate an empty list of metrics.")
+        value_lists = [ml.values for ml in metric_lists]
+        if not all(len(ls) == len(value_lists[0]) for ls in value_lists):
             raise ValueError(
-                f"All Metric instances must have the same number of values for dp aggregation: {value_lists}"
+                f"All Metric instances must have the same number of values "
+                f"for dp aggregation: {[len(ls) for ls in value_lists]}"
             )
         value_arrays = np.array(value_lists)  # [num_dp, num_grad_accumulation]
         aggregation = metric_lists[0].aggregation
