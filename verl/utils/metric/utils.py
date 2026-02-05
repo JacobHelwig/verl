@@ -146,7 +146,9 @@ class Metric:
         aggregation = metric_lists[0].aggregation
         match aggregation:
             case AggregationType.SUM | AggregationType.MEAN:
-                return cls._aggregate(np.mean(value_arrays, axis=0), aggregation)  # mean over dp ranks
+                return cls._aggregate(
+                    values=np.mean(value_arrays, axis=0), aggregation=aggregation
+                )  # mean over dp ranks
             case AggregationType.MIN | AggregationType.MAX:
                 return cls._aggregate(values=value_arrays.flatten(), aggregation=aggregation)  # min/max over all values
 
