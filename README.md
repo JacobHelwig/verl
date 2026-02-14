@@ -4,6 +4,19 @@
 eval "$(conda shell.bash hook)"
 ```
 
+# Install npm
+
+```bash
+https://stackoverflow.com/a/31046037/10965084
+
+```
+
+# Install codex 
+
+```bash
+npm i -g @openai/codex
+```
+
 # Install claude
 
 ```bash
