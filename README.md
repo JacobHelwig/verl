@@ -39,6 +39,14 @@ pip install --no-deps -e . # add verl to root w/o installing dependencies, which
 
 /nvme-data/jacob/verl$ pytest -v # run tests to verify the installation
 ```
+In some cases (server 9) the following need to be done after vanilla env init:
+
+```bash
+python -m pip install antlr4-python3-runtime==4.9.3
+python -m pip install transformers==4.57.0 
+python -m pip install numpy==2.2
+```
+
 
 # Debug args
 
