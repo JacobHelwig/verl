@@ -492,7 +492,9 @@ class AgentLoopWorker:
             )
         outputs = await asyncio.gather(*tasks)
 
-        output = self._postprocess(outputs, input_non_tensor_batch=batch.non_tensor_batch, validate=batch.meta_info.get("validate", False))
+        output = self._postprocess(
+            outputs, input_non_tensor_batch=batch.non_tensor_batch, validate=batch.meta_info.get("validate", False)
+        )
         return output
 
     async def _run_agent_loop(
@@ -750,10 +752,18 @@ class AgentLoopWorker:
     async def _compute_teacher_logprobs(self, output, prompt_ids, response_ids, validate):
         """Compute teacher logprobs for single sample."""
         if self.distillation_enabled and not validate:
-            data = DataProto(batch=TensorDict({"prompt_ids": torch.tensor([prompt_ids]), "response_ids": torch.tensor([response_ids])}, batch_size=1))
+            data = DataProto(
+                batch=TensorDict(
+                    {"prompt_ids": torch.tensor([prompt_ids]), "response_ids": torch.tensor([response_ids])},
+                    batch_size=1,
+                )
+            )
             selected_teacher_loop_worker_handle = random.choice(self.teacher_loop_worker_handles)
             result = await selected_teacher_loop_worker_handle.compute_logprobs.remote(data)
-            response_ids, response_logprobs = result["response_ids"], result["response_logprobs"] # (1, S, K), S=sequence length, K=topk/1
+            response_ids, response_logprobs = (
+                result["response_ids"],
+                result["response_logprobs"],
+            )  # (1, S, K), S=sequence length, K=topk/1
 
             pad_size = self.config.actor_rollout_ref.rollout.response_length - response_ids.shape[1]
             padding = (0, 0, 0, pad_size)  # pad the sequence dimension
@@ -1015,7 +1025,9 @@ class AgentLoopManager:
                     scheduling_strategy=ray.util.scheduling_strategies.NodeAffinitySchedulingStrategy(
                         node_id=node_id, soft=True
                     ),
-                ).remote(self.config, self.server_handles, self.reward_loop_worker_handles, self.teacher_loop_worker_handles)
+                ).remote(
+                    self.config, self.server_handles, self.reward_loop_worker_handles, self.teacher_loop_worker_handles
+                )
             )
 
     @auto_await
