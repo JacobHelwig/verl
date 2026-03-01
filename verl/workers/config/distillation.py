@@ -19,18 +19,12 @@ from typing import Optional
 
 from verl.base_config import BaseConfig
 
-from .model import HFModelConfig
-
-
-from verl.base_config import BaseConfig
-
 from .rollout import RolloutConfig
 
 __all__ = ["DistillationLossConfig", "DistillationTeacherModelConfig", "DistillationConfig"]
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
-
 
 
 @dataclass
