@@ -1034,7 +1034,7 @@ class AgentLoopManager:
             DataProto: Output batch.
         """
         if self.distillation_enabled:  # TODO: need same for reward loop workers
-            self.teacher_loop_manager.wake_up()
+            await self.teacher_loop_manager.wake_up()
         chunkes = prompts.chunk(len(self.agent_loop_workers))
         outputs = await asyncio.gather(
             *[
@@ -1043,7 +1043,7 @@ class AgentLoopManager:
             ]
         )
         if self.distillation_enabled:  # TODO: need same for reward loop workers
-            self.teacher_loop_manager.sleep()
+            await self.teacher_loop_manager.sleep()
         output = DataProto.concat(outputs)
 
         # calculate performance metrics
