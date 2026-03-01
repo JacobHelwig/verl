@@ -35,11 +35,11 @@ MAX_PROMPT=256
 MAX_RESPONSE_LENGTH=512
 MAX_NUM_TOKENS=$(( MAX_PROMPT + MAX_RESPONSE_LENGTH ))
 TRAIN_PROMPT_BSZ=128
-STUDENT_MICRO_BATCH_SIZE_PER_GPU=2
+STUDENT_MICRO_BATCH_SIZE_PER_GPU=1
 STUDENT_MAX_TOKEN_LEN_PER_GPU=$(( STUDENT_MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
 USE_DYNAMIC_BSZ=False
 
-STUDENT_WORLD_SIZE=2
+STUDENT_WORLD_SIZE=4
 
 TEACHER_RESOURCE_POOL=False
 TEACHER_WORLD_SIZE=2
@@ -102,6 +102,7 @@ DISTILLATION=(
     distillation.teacher_model.inference.enforce_eager=$ENFORCE_EAGER
     distillation.teacher_model.inference.max_model_len=$MAX_NUM_TOKENS
     distillation.teacher_model.inference.max_num_batched_tokens=$MAX_NUM_TOKENS
+    distillation.teacher_model.inference.max_num_seqs=$MAX_NUM_TOKENS
     distillation.distillation_loss.loss_mode=$DISTILLATION_LOSS_MODE
     distillation.distillation_loss.topk=64
     distillation.distillation_loss.use_task_rewards=False
@@ -116,9 +117,20 @@ STUDENT=(
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=$STUDENT_MICRO_BATCH_SIZE_PER_GPU
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$STUDENT_MAX_TOKEN_LEN_PER_GPU
     actor_rollout_ref.actor.use_dynamic_bsz=$USE_DYNAMIC_BSZ
-    actor_rollout_ref.actor.fsdp_config.param_offload=True
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
-    actor_rollout_ref.actor.ulysses_sequence_parallel_size=1
+    actor_rollout_ref.actor.megatron.use_mbridge=True
+    actor_rollout_ref.actor.megatron.vanilla_mbridge=False
+    actor_rollout_ref.actor.megatron.use_remove_padding=True
+    actor_rollout_ref.actor.megatron.tensor_model_parallel_size=${TP}
+    actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=${PP}
+    actor_rollout_ref.actor.megatron.expert_model_parallel_size=${EP}
+    actor_rollout_ref.actor.megatron.context_parallel_size=${CP}
+    actor_rollout_ref.actor.megatron.expert_tensor_parallel_size=${ETP}
+    actor_rollout_ref.actor.megatron.param_offload=${PARAM_OFFLOAD}
+    actor_rollout_ref.actor.megatron.optimizer_offload=${OPTIMIZER_OFFLOAD}
+    actor_rollout_ref.actor.megatron.grad_offload=${GRAD_OFFLOAD}
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_method=uniform
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_granularity=full
+    +actor_rollout_ref.actor.megatron.override_transformer_config.recompute_num_layers=1
 )
 
 ROLLOUT=(
@@ -131,6 +143,7 @@ ROLLOUT=(
     actor_rollout_ref.rollout.calculate_log_probs=False
     actor_rollout_ref.rollout.max_model_len=$MAX_NUM_TOKENS
     actor_rollout_ref.rollout.max_num_batched_tokens=$MAX_NUM_TOKENS
+    actor_rollout_ref.rollout.max_num_seqs=$MAX_NUM_TOKENS
     actor_rollout_ref.rollout.n=1
 )
 
@@ -140,7 +153,7 @@ ALGORITHM=(
 )
 
 TRAINER=(
-    trainer.logger='["console","wandb"]'
+    trainer.logger='["console"]'
     trainer.project_name=$PROJECT_NAME
     trainer.experiment_name=$EXP_NAME
     trainer.n_gpus_per_node=$STUDENT_WORLD_SIZE
@@ -148,7 +161,7 @@ TRAINER=(
     trainer.save_freq=200
     trainer.test_freq=5
     trainer.total_epochs=15
-    trainer.val_before_train=True
+    trainer.val_before_train=False
     trainer.use_legacy_worker_impl=disable
     trainer.resume_mode=disable
     trainer.log_val_generations=5

@@ -799,7 +799,7 @@ class MegatronEngineWithLMHead(MegatronEngine):
                 else:
                     logits_bak = logits
                 if self.distillation_enabled:
-                    ret["logits"] = logits
+                    ret["logits"] = logits.clone()
                 log_probs = vocab_parallel_log_probs_from_logits(logits_bak, label)
                 ret["log_probs"] = log_probs
                 return ret
