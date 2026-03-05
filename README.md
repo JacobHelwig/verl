@@ -4,6 +4,20 @@
 eval "$(conda shell.bash hook)"
 ```
 
+# Merging the model and upload to HF
+
+```bash
+CKPT=checkpoints/verl_grpo_example_math/Qwen/Qwen3-4B-Instruct-2507/global_step_60/actor
+TARGET_DIR=$CKPT/merged
+HF_REPO_ID=jacob-helwig/Qwen3-4B-Instruct-2507-GRPO-MATH-1024
+python -m verl.model_merger merge \
+    --backend fsdp \
+    --local_dir $CKPT \
+    --target_dir $TARGET_DIR \
+    --hf_upload_path $HF_REPO_ID
+
+```
+
 # Install npm
 
 ```bash
