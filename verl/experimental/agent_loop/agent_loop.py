@@ -877,7 +877,8 @@ class AgentLoopWorker:
             teacher_server_manager = self.teacher_server_managers_by_task.get(task)
             if teacher_server_manager is None:
                 raise ValueError(
-                    f"No teacher configured for {task=}. Available tasks: {sorted(set(self.teacher_server_managers_by_task))}"
+                    f"No teacher configured for {task=}. Available tasks: "
+                    f"{sorted(set(self.teacher_server_managers_by_task))}"
                 )
             logprob_params = {
                 "use_topk": self.distillation_loss_config.loss_settings.use_topk,
