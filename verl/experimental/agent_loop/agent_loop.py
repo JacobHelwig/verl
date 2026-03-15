@@ -403,8 +403,8 @@ class AgentLoopWorker:
         config (DictConfig): whole config for main entrypoint.
         servers (list[tuple[str, ray.actor.ActorHandle]]): (address, handle) pairs for each LLM server.
         load_balancer_handle (ray.actor.ActorHandle): shared global load balancer actor.
-        teacher_servers (list[tuple[str, ray.actor.ActorHandle]]): (address, handle) pairs for each teacher LLM server.
-        teacher_load_balancer_handle (ray.actor.ActorHandle): global load balancer actor for teacher servers.
+        teacher_servers_by_task (dict[str, list[tuple[str, ray.actor.ActorHandle]]]): teacher servers by task.
+        teacher_load_balancers_by_task (dict[str, ray.actor.ActorHandle]): teacher load balancers by task.
         reward_loop_worker_handles (List[ray.actor.ActorHandle]): Actor handles for streaming reward computation.
     """
 
@@ -413,8 +413,8 @@ class AgentLoopWorker:
         config: DictConfig,
         servers: list[tuple[str, ray.actor.ActorHandle]],
         load_balancer_handle: ray.actor.ActorHandle,
-        teacher_servers: list[tuple[str, ray.actor.ActorHandle]] = None,
-        teacher_load_balancer_handle: ray.actor.ActorHandle = None,
+        teacher_servers_by_task: dict[str, list[tuple[str, ray.actor.ActorHandle]]] = None,
+        teacher_load_balancers_by_task: dict[str, ray.actor.ActorHandle] = None,
         reward_loop_worker_handles: list[ray.actor.ActorHandle] = None,
     ):
         """Initialize agent loop manager.
@@ -423,7 +423,7 @@ class AgentLoopWorker:
             servers (list[tuple[str, ray.actor.ActorHandle]]): (address, handle) pairs for each LLM server.
             load_balancer_handle (ray.actor.ActorHandle): shared global load balancer actor.
             reward_loop_worker_handles (list[ray.actor.ActorHandle]): Actor handles for streaming reward computation.
-            teacher_servers (list[tuple[str, ray.actor.ActorHandle]]): (address, handle) pairs for each teacher server.
+            teacher_servers_by_task (dict[str, list[tuple[str, ray.actor.ActorHandle]]]): Teacher servers by task.
         """
         self.config = config
         rollout_config, model_config = _get_rollout_and_model_config(config)
@@ -432,20 +432,24 @@ class AgentLoopWorker:
         self.distillation_config = config.get("distillation", None)
         self.distillation_enabled = is_distillation_enabled(self.distillation_config)
         if self.distillation_enabled:
-            if teacher_servers is None:
+            if teacher_servers_by_task is None:
                 raise ValueError("Distillation is enabled but no teacher servers provided.")
-            if teacher_load_balancer_handle is None:
+            if teacher_load_balancers_by_task is None:
                 raise ValueError("Distillation is enabled but no teacher load balancer provided.")
             self.distillation_config: DistillationConfig = omega_conf_to_dataclass(self.distillation_config)
             self.distillation_loss_config: DistillationLossConfig = self.distillation_config.distillation_loss
 
             # for recipe to change
-            if not hasattr(self, "teacher_server_manager"):
-                self.teacher_server_manager = AsyncLLMServerManager(
-                    config,
-                    teacher_servers,
-                    load_balancer_handle=teacher_load_balancer_handle,
-                )
+            if not hasattr(self, "teacher_server_managers_by_task"):
+                self.teacher_server_managers_by_task = {
+                    task: AsyncLLMServerManager(
+                        config,
+                        teacher_servers,
+                        load_balancer_handle=teacher_load_balancers_by_task[task],
+                    )
+                    for task, teacher_servers in teacher_servers_by_task.items()
+                }
+                self.distillation_task_key = self.distillation_config.task_key
 
         # for recipe to change
         if not hasattr(self, "server_manager"):
@@ -708,6 +712,7 @@ class AgentLoopWorker:
             prompt_ids=output.prompt_ids,
             response_ids=output.response_ids,
             validate=validate,
+            task=kwargs.get(self.distillation_task_key) if self.distillation_enabled else None,
         )
         teacher_ids, teacher_logprobs = (
             output.extra_fields.pop("teacher_ids", None),
@@ -835,7 +840,7 @@ class AgentLoopWorker:
             output.reward_score = result["reward_score"]
             output.extra_fields["reward_extra_info"] = result["reward_extra_info"]
 
-    async def _compute_teacher_logprobs(self, output: AgentLoopOutput, prompt_ids, response_ids, validate):
+    async def _compute_teacher_logprobs(self, output: AgentLoopOutput, prompt_ids, response_ids, validate, task):
         """Compute teacher logprobs for single sample."""
         if self.distillation_enabled and not validate:
             # This assumes that the teacher processes multi-modal data in the same way as the student
@@ -854,7 +859,14 @@ class AgentLoopWorker:
                 "temperature": self.distillation_config.teacher_model.inference.temperature,
                 "prompt_logprobs": num_logprobs,
             }
-            teacher_output = await self.teacher_server_manager.generate(
+            if task is None:
+                raise ValueError(f"Missing {self.distillation_task_key=} in batch.non_tensor_batch.")
+            teacher_server_manager = self.teacher_server_managers_by_task.get(task)
+            if teacher_server_manager is None:
+                raise ValueError(
+                    f"No teacher configured for {task=}. Available tasks: {sorted(set(self.teacher_server_managers_by_task))}"
+                )
+            teacher_output = await teacher_server_manager.generate(
                 request_id=uuid4().hex,
                 prompt_ids=prompt_ids + response_ids,
                 sampling_params=sampling_params,
@@ -1100,13 +1112,20 @@ class AgentLoopManager:
         servers = list(zip(self.server_addresses, self.server_handles, strict=True))
 
         if self.distillation_enabled:
-            teacher_server_handles = self.teacher_model_manager.server_handles
-            teacher_server_addresses = self.teacher_model_manager.server_addresses
-            teacher_servers = list(zip(teacher_server_addresses, teacher_server_handles, strict=True))
-            teacher_load_balancer_handle = self.teacher_global_load_balancer
+            teacher_servers_by_task = {
+                task: list(
+                    zip(
+                        self.teacher_model_manager.server_addresses_by_task[task],
+                        self.teacher_model_manager.server_handles_by_task[task],
+                        strict=True,
+                    )
+                )
+                for task in self.teacher_model_manager.server_handles_by_task
+            }
+            teacher_load_balancers_by_task = self.teacher_global_load_balancers
         else:
-            teacher_servers = None
-            teacher_load_balancer_handle = None
+            teacher_servers_by_task = None
+            teacher_load_balancers_by_task = None
 
         node_ids = [node["NodeID"] for node in ray.nodes() if node["Alive"] and node["Resources"].get("CPU", 0) > 0]
         for i in range(num_workers):
@@ -1122,8 +1141,8 @@ class AgentLoopManager:
                     self.config,
                     servers,
                     load_balancer_handle,
-                    teacher_servers,
-                    teacher_load_balancer_handle,
+                    teacher_servers_by_task,
+                    teacher_load_balancers_by_task,
                     self.reward_loop_worker_handles,
                 )
             )
@@ -1134,10 +1153,13 @@ class AgentLoopManager:
             max_cache_size=DEFAULT_ROUTING_CACHE_SIZE,
         )
         if self.distillation_enabled:
-            self.teacher_global_load_balancer = GlobalRequestLoadBalancer.remote(
-                server_actor_ids=self.teacher_model_manager.server_addresses,
-                max_cache_size=DEFAULT_ROUTING_CACHE_SIZE,
-            )
+            self.teacher_global_load_balancers = {
+                task: GlobalRequestLoadBalancer.remote(
+                    server_actor_ids=teacher_server_addresses,
+                    max_cache_size=DEFAULT_ROUTING_CACHE_SIZE,
+                )
+                for task, teacher_server_addresses in self.teacher_model_manager.server_addresses_by_task.items()
+            }
 
     @auto_await
     async def generate_sequences(self, prompts: DataProto) -> DataProto:

@@ -53,33 +53,50 @@ class TeacherModelManager:
         self.sleep()
 
     def _initialize_llm_servers(self):
-        teacher_model_config: DistillationTeacherModelConfig = self.config.teacher_model
+        teacher_configs: dict[str, DistillationTeacherModelConfig] = self.config.teacher_models
         teacher_world_size = (
-            teacher_model_config.inference.tensor_model_parallel_size
-            * teacher_model_config.inference.data_parallel_size
-            * teacher_model_config.inference.pipeline_model_parallel_size
+            self.config.inference.tensor_model_parallel_size
+            * self.config.inference.data_parallel_size
+            * self.config.inference.pipeline_model_parallel_size
         )
         world_size = (
             self.resource_pool.world_size
             if self.resource_pool  # colocate mode
-            else teacher_model_config.n_gpus_per_node * teacher_model_config.nnodes  # standalone mode
+            else self.config.n_gpus_per_node * self.config.nnodes  # standalone mode
         )
         num_replicas = world_size // teacher_world_size
-
-        rollout_replica_class = get_rollout_replica_class(teacher_model_config.inference.name)
-        rollout_config = teacher_model_config.inference
-        model_config = HFModelConfig(path=teacher_model_config.model_path)
-        self.tokenizer = model_config.get_processor()
-        self.rollout_replicas = [
-            rollout_replica_class(
-                replica_rank=replica_rank,
-                config=rollout_config,
-                model_config=model_config,
-                gpus_per_node=teacher_model_config.n_gpus_per_node,
-                is_teacher_model=True,
+        num_teachers = len(teacher_configs)
+        if num_replicas < num_teachers:
+            raise ValueError(
+                f"Need at least one teacher replica per teacher, but got {num_replicas=} for {num_teachers=}."
             )
-            for replica_rank in range(num_replicas)
-        ]
+        if num_replicas % num_teachers != 0:
+            raise ValueError(
+                f"Teacher replicas ({num_replicas}) must be divisible by the number of teachers ({num_teachers})."
+            )
+        replicas_per_teacher = num_replicas // num_teachers
+
+        self.rollout_replicas = []
+        self.teacher_replicas_by_task = {}
+        replica_rank = 0
+        rollout_replica_class = get_rollout_replica_class(self.config.inference.name)
+        for teacher_model_config in teacher_configs.values():
+            model_config = HFModelConfig(path=teacher_model_config.model_path)
+
+            teacher_replicas = [
+                rollout_replica_class(
+                    replica_rank=replica_rank + offset,
+                    config=self.config.inference,
+                    model_config=model_config,
+                    gpus_per_node=self.config.n_gpus_per_node,
+                    is_teacher_model=True,
+                )
+                for offset in range(replicas_per_teacher)
+            ]
+            self.rollout_replicas.extend(teacher_replicas)
+            self.teacher_replicas_by_task[teacher_model_config.task] = teacher_replicas
+            replica_rank += replicas_per_teacher
+
         if self.resource_pool:
             split_resource_pools = split_resource_pool(self.resource_pool, split_size=teacher_world_size)
             assert len(split_resource_pools) == len(self.rollout_replicas)
@@ -91,18 +108,31 @@ class TeacherModelManager:
             )
         else:
             self._run_all([server.init_standalone() for server in self.rollout_replicas])
+
+        self.server_handles_by_task = {
+            task: [server._server_handle for server in teacher_replicas]
+            for task, teacher_replicas in self.teacher_replicas_by_task.items()
+        }
+        self.server_addresses_by_task = {
+            task: [server._server_address for server in teacher_replicas]
+            for task, teacher_replicas in self.teacher_replicas_by_task.items()
+        }
         self.server_handles = [server._server_handle for server in self.rollout_replicas]
         self.server_addresses = [server._server_address for server in self.rollout_replicas]
 
     def _initialize_router(self):
-        worker_urls = [f"http://{server_address}" for server_address in self.server_addresses]
+        self.router_address_by_task = {}
 
         from ..reward_loop.router.naive_router import launch_router_process
 
-        self.router_address, _ = launch_router_process(worker_urls=worker_urls)
+        for task, server_addresses in self.server_addresses_by_task.items():
+            worker_urls = [f"http://{server_address}" for server_address in server_addresses]
+            self.router_address_by_task[task], _ = launch_router_process(worker_urls=worker_urls)
 
-    def get_router_address(self):
-        return self.router_address
+    def get_router_address(self, task: str | None = None):
+        if task is None:
+            return self.router_address_by_task
+        return self.router_address_by_task[task]
 
     @auto_await
     async def wake_up(self):
