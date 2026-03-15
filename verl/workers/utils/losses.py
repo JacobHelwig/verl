@@ -160,7 +160,7 @@ def ppo_loss(
 
         # AggregationType.MEAN for pg metrics: assumes policy_loss_fn normalizes by local_bsz/local_tokens
         # Ex: in compute_policy_loss_vanilla, pg_metrics are pg_clipfrac, ppo_kl, pg_clipfrac_lower
-        pg_metrics = Metric.from_dict(pg_metrics, aggregation=AggregationType.MEAN)
+        pg_metrics = {key: Metric(AggregationType.MEAN, value) for key, value in pg_metrics.items()}
 
         metrics.update(pg_metrics)
         metrics["actor/pg_loss"] = Metric(value=pg_loss, aggregation=metric_aggregation)
@@ -175,7 +175,7 @@ def ppo_loss(
         )
         entropy_coeff = config.entropy_coeff
         policy_loss -= entropy_coeff * entropy_loss
-        metrics["actor/entropy_loss"] = Metric(value=entropy_loss, aggregation=metric_aggregation)
+        metrics["actor/entropy_loss"] = Metric(value=entropy, aggregation=metric_aggregation)
 
     # add kl loss
     if config.use_kl_loss:
