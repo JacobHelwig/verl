@@ -864,7 +864,8 @@ class AgentLoopWorker:
             teacher_server_manager = self.teacher_server_managers_by_task.get(task)
             if teacher_server_manager is None:
                 raise ValueError(
-                    f"No teacher configured for {task=}. Available tasks: {sorted(set(self.teacher_server_managers_by_task))}"
+                    f"No teacher configured for {task=}. Available tasks: "
+                    f"{sorted(set(self.teacher_server_managers_by_task))}"
                 )
             teacher_output = await teacher_server_manager.generate(
                 request_id=uuid4().hex,
