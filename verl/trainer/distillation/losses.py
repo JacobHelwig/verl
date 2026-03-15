@@ -104,19 +104,15 @@ def compute_distillation_loss_range(
     """Compute min and max distillation loss over valid response tokens."""
     distillation_losses_response = distillation_losses[response_mask]
     return {
-        "distillation/loss_min": Metric(AggregationType.MIN, distillation_losses_response.min()),
-        "distillation/loss_max": Metric(AggregationType.MAX, distillation_losses_response.max()),
+        "distillation/loss_min": Metric(AggregationType.MIN, distillation_losses_response),
+        "distillation/loss_max": Metric(AggregationType.MAX, distillation_losses_response),
     }
 
 
 def compute_task_distillation_loss_metrics(
     distillation_losses: torch.Tensor, response_mask: torch.Tensor, task_labels: list[str]
 ) -> dict[str, Metric]:
-    """Compute per-task mean distillation loss over valid response tokens.
-    Note: because we don't have per-task token counts across ranks, this will result
-    in a incorrect estimate of the true per-task mean when ranks have uneven number of tokens
-    per task, since metrics per rank will be aggregated using simple mean instead of weighted mean.
-    """
+    """Compute per-task mean distillation loss over valid response tokens."""
     if len(task_labels) != len(distillation_losses):
         raise ValueError(
             f"Expected one task label per sample, but got {len(task_labels)=} and "
@@ -132,7 +128,7 @@ def compute_task_distillation_loss_metrics(
         if not task_response_mask.any():
             continue
         task_losses = distillation_losses[task_mask][task_response_mask]
-        metrics[f"distillation/loss/{task}"] = Metric(AggregationType.MEAN, task_losses.mean())
+        metrics[f"distillation/loss/{task}"] = Metric(AggregationType.MEAN, task_losses)
     return metrics
 
 
@@ -281,11 +277,11 @@ def compute_forward_kl_topk(
     teacher_mass = teacher_mass[response_mask]
     distillation_metrics = {
         "distillation/student_mass": student_mass.mean().item(),
-        "distillation/student_mass_min": Metric(AggregationType.MIN, student_mass.min()),
-        "distillation/student_mass_max": Metric(AggregationType.MAX, student_mass.max()),
+        "distillation/student_mass_min": Metric(AggregationType.MIN, student_mass),
+        "distillation/student_mass_max": Metric(AggregationType.MAX, student_mass),
         "distillation/teacher_mass": teacher_mass.mean().item(),
-        "distillation/teacher_mass_min": Metric(AggregationType.MIN, teacher_mass.min()),
-        "distillation/teacher_mass_max": Metric(AggregationType.MAX, teacher_mass.max()),
+        "distillation/teacher_mass_min": Metric(AggregationType.MIN, teacher_mass),
+        "distillation/teacher_mass_max": Metric(AggregationType.MAX, teacher_mass),
     }
 
     # Due to use of top-k, student and teacher distributions don't sum to 1 -> divergences can be negative.
@@ -335,6 +331,6 @@ def compute_distillation_loss_reverse_kl_estimator(
     )
     # Since k1 can be negative, log the mean absolute loss.
     metrics = {
-        "distillation/abs_loss": Metric(AggregationType.MEAN, distillation_losses[response_mask].abs().mean()),
+        "distillation/abs_loss": Metric(AggregationType.MEAN, distillation_losses[response_mask].abs()),
     }
     return distillation_losses, metrics
