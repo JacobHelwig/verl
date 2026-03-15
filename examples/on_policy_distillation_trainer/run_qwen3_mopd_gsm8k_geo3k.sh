@@ -17,7 +17,8 @@ ROLLOUT_NAME="vllm" # sglang or vllm
 
 FAMILY="Qwen"
 STUDENT_MODEL=Qwen3-VL-2B-Instruct
-TEACHER_MODEL=Qwen3-VL-4B-Instruct
+GSM8K_TEACHER_MODEL=Qwen3-4B-Instruct-2507
+GEO3K_TEACHER_MODEL=Qwen3-VL-4B-Instruct
 
 # USE_POLICY_GRADIENT=False
 # DISTILLATION_LOSS_MODE="k3"
@@ -31,8 +32,8 @@ USE_FUSED_KERNELS=True
 DISTILLATION_LOSS_MAX_CLAMP=10.0
 DISTILLATION_LOG_PROB_MIN_CLAMP=-10.0
 
-PROJECT_NAME='verl_on_policy_distillation_example_geo3k'
-EXP_NAME="${FAMILY}/student-${STUDENT_MODEL}/teacher-${TEACHER_MODEL}/loss-${DISTILLATION_LOSS_MODE}-pg-${USE_POLICY_GRADIENT}-maxclamp-${DISTILLATION_LOSS_MAX_CLAMP}-logprobminclamp-${DISTILLATION_LOG_PROB_MIN_CLAMP}-fused_kernels-${USE_FUSED_KERNELS}"
+PROJECT_NAME='verl_on_policy_distillation_example_gsm8k_geo3k'
+EXP_NAME="${FAMILY}/student-${STUDENT_MODEL}/teacher-gsm8k-${GSM8K_TEACHER_MODEL}/teacher-geo3k-${GEO3K_TEACHER_MODEL}/loss-${DISTILLATION_LOSS_MODE}-pg-${USE_POLICY_GRADIENT}-maxclamp-${DISTILLATION_LOSS_MAX_CLAMP}-logprobminclamp-${DISTILLATION_LOG_PROB_MIN_CLAMP}-fused_kernels-${USE_FUSED_KERNELS}"
 
 MAX_PROMPT=1024
 MAX_RESPONSE_LENGTH=2048
@@ -42,20 +43,22 @@ STUDENT_MICRO_BATCH_SIZE_PER_GPU=1
 STUDENT_MAX_TOKEN_LEN_PER_GPU=$(( STUDENT_MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
 USE_DYNAMIC_BSZ=False
 
-STUDENT_WORLD_SIZE=4
+STUDENT_WORLD_SIZE=2
 
 TEACHER_RESOURCE_POOL=True
-TEACHER_WORLD_SIZE=4
+TEACHER_WORLD_SIZE=2
 
 ENFORCE_EAGER=False # true for faster debugging
 
 ############################ Paths ############################
 
+gsm8k_train_path=$DATA_PATH/gsm8k/train.parquet
+gsm8k_test_path=$DATA_PATH/gsm8k/test.parquet
 geo3k_train_path=$DATA_PATH/geo3k/train.parquet
 geo3k_test_path=$DATA_PATH/geo3k/test.parquet
 
-TRAIN_FILES="['$geo3k_train_path']"
-TEST_FILES="['$geo3k_test_path']"
+TRAIN_FILES="['$gsm8k_train_path','$geo3k_train_path']"
+TEST_FILES="['$gsm8k_test_path','$geo3k_test_path']"
 
 ############################ Parameter Groups ############################
 
@@ -67,7 +70,7 @@ DATA=(
     data.train_batch_size=$TRAIN_PROMPT_BSZ
     data.filter_overlong_prompts=True
     data.truncation='error'
-    data.shuffle=False
+    data.shuffle=True
     data.image_key=images
 )
 
@@ -87,8 +90,10 @@ DISTILLATION=(
     distillation.enable_resource_pool=$TEACHER_RESOURCE_POOL
     distillation.n_gpus_per_node=$TEACHER_WORLD_SIZE
     distillation.nnodes=1
+    +distillation.teacher_models.gsm8k.task="openai/gsm8k"
+    +distillation.teacher_models.gsm8k.model_path="${FAMILY}/${GSM8K_TEACHER_MODEL}"
     +distillation.teacher_models.geo3k.task="hiyouga/geometry3k"
-    +distillation.teacher_models.geo3k.model_path="${FAMILY}/${TEACHER_MODEL}"
+    +distillation.teacher_models.geo3k.model_path="${FAMILY}/${GEO3K_TEACHER_MODEL}"
     distillation.inference.tensor_model_parallel_size=1
     distillation.inference.name=$ROLLOUT_NAME
     distillation.inference.gpu_memory_utilization=0.8
