@@ -301,7 +301,8 @@ def extract_prompt_logprobs(output: RequestOutput, num_prompt_logprobs: Optional
     # way to extract onto the part of the prompt corresponding to the response
     if num_prompt_logprobs is None:
         return
-    prompt_logprobs_ls, prompt_ids_ls = [[0.0] * max(num_prompt_logprobs, 1)], [[0] * max(num_prompt_logprobs, 1)]
+
+    prompt_logprobs_ls, prompt_ids_ls = [], []
     # NOTE: logprob of first prompt token is None.
     for logprobs_dict in output.prompt_logprobs[1:]:
         if num_prompt_logprobs == 0:
@@ -323,5 +324,10 @@ def extract_prompt_logprobs(output: RequestOutput, num_prompt_logprobs: Optional
                 prompt_logprobs[rank - 1] = logprob
             prompt_logprobs_ls.append(prompt_logprobs)
             prompt_ids_ls.append(prompt_ids)
+
+    # NOTE: pad a dummy prompt logprob for last prompt token.
+    prompt_logprobs_ls.append([0.0] * max(num_prompt_logprobs, 1))
+    prompt_ids_ls.append([0] * max(num_prompt_logprobs, 1))
+
     result_dict["prompt_ids"] = prompt_ids_ls
     result_dict["prompt_logprobs"] = prompt_logprobs_ls
