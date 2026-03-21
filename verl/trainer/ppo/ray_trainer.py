@@ -40,6 +40,7 @@ from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
 from verl.single_controller.ray import RayClassWithInitArgs, RayWorkerGroup, ResourcePoolManager
 from verl.single_controller.ray.base import create_colocated_worker_cls
 from verl.trainer.config import AlgoConfig
+from verl.trainer.distillation.losses import is_distillation_enabled
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import AdvantageEstimator, agg_loss
 from verl.trainer.ppo.metric_utils import (
@@ -1201,7 +1202,9 @@ class RayPPOTrainer:
             batch_td = left_right_2_no_padding(batch_td)
             calculate_entropy = self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
             distillation_use_topk = (
-                self.distillation_config.distillation_loss.loss_settings.use_topk if self.use_teacher_policy else False
+                self.distillation_config.distillation_loss.loss_settings.use_topk
+                if is_distillation_enabled(self.config.get("distillation"))
+                else False
             )
             ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
             ppo_mini_batch_size = ppo_mini_batch_size * self.config.actor_rollout_ref.rollout.n
