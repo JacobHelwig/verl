@@ -117,6 +117,9 @@ class TestVocabParallelKLDivergence:
 
         return full_student_logits, teacher_topk_logps, teacher_topk_ids
 
+    def to_nested(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.nested.as_nested_tensor([tensor[i] for i in range(tensor.shape[0])], layout=torch.jagged)
+
     def verify_correctness(self, iterations: int = 5):
         self.cleanup()
         self.generate_hyper()
@@ -135,6 +138,9 @@ class TestVocabParallelKLDivergence:
             dist.broadcast(full_student_logits, src=0, group=self.group)
             dist.broadcast(teacher_topk_logps, src=0, group=self.group)
             dist.broadcast(teacher_topk_ids, src=0, group=self.group)
+            full_student_logits = full_student_logits.reshape(1, -1, self.vocab_size)
+            teacher_topk_logps = self.to_nested(teacher_topk_logps)
+            teacher_topk_ids = self.to_nested(teacher_topk_ids)
 
             # VP implementation on sharded logits
             vp_logits = full_student_logits[..., shard_start:shard_end].contiguous().detach().requires_grad_(True)
@@ -143,6 +149,7 @@ class TestVocabParallelKLDivergence:
                 teacher_topk_log_probs=teacher_topk_logps,
                 teacher_topk_ids=teacher_topk_ids,
                 config=cfg,
+                data_format="thd",
             )
             vp_loss = loss_out["distillation_losses"]
             vp_loss.sum().backward()
@@ -155,6 +162,7 @@ class TestVocabParallelKLDivergence:
                 teacher_topk_log_probs=teacher_topk_logps,
                 teacher_topk_ids=teacher_topk_ids,
                 config=cfg,
+                data_format="thd",
             )
             ref_loss = fsdp_loss_out["distillation_losses"]
             ref_loss.sum().backward()
@@ -178,9 +186,11 @@ if __name__ == "__main__":
     torch.manual_seed(42 + int(os.environ.get("RANK", 0)))
 
     test = TestVocabParallelKLDivergence()
-    for test_case_idx in range(MAX_TEST_CASES):
-        if test.local_rank == 0:
-            print(f"[INFO] Running test case {test_case_idx}")
-        test.initialize(test_case_idx)
-        test.verify_correctness()
-    test.shutdown()
+    try:
+        for test_case_idx in range(MAX_TEST_CASES):
+            if test.local_rank == 0:
+                print(f"[INFO] Running test case {test_case_idx}")
+            test.initialize(test_case_idx)
+            test.verify_correctness()
+    finally:
+        test.shutdown()
