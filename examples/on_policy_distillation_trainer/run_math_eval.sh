@@ -8,7 +8,7 @@ conda activate verl
 export PATH=$CONDA_PREFIX/bin:$PATH
 export NCCL_P2P_DISABLE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=1,2,3,4
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
 export DATA_PATH=$PWD/../verlData
 export HF_HOME=$DATA_PATH
 export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
@@ -20,7 +20,7 @@ set -xeuo pipefail
 ROLLOUT_NAME="vllm" # sglang or vllm
 
 # MODEL="Qwen/Qwen3-1.7B"
-MODEL="Qwen/Qwen3-4B-Instruct-2507"
+# MODEL="Qwen/Qwen3-4B-Instruct-2507"
 MODEL="Qwen/Qwen3-4B"
 
 SAVE_FREQ=20
@@ -31,7 +31,7 @@ PROJECT_NAME='verl_grpo_example_math'
 EXP_NAME="${MODEL}"
 
 MAX_PROMPT=1024
-MAX_RESPONSE_LENGTH=8192
+MAX_RESPONSE_LENGTH=2048
 MAX_NUM_TOKENS=$(( MAX_PROMPT + MAX_RESPONSE_LENGTH ))
 
 TRAIN_PROMPT_BSZ=600
@@ -41,7 +41,7 @@ MICRO_BATCH_SIZE_PER_GPU=2
 MAX_TOKEN_LEN_PER_GPU=$(( MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
 USE_DYNAMIC_BSZ=False
 
-WORLD_SIZE=4
+WORLD_SIZE=6
 
 ENFORCE_EAGER=False # true for faster debugging
 
@@ -53,8 +53,11 @@ gsm8k_test_path=$DATA_PATH/gsm8k_boxed/test.parquet
 math_train_path=$DATA_PATH/math/train.parquet
 math_test_path=$DATA_PATH/math/test.parquet
 
+dapo_test_path=$DATA_PATH/dapo_math_17k/train.parquet
+
 TRAIN_FILES="['$math_train_path', '$gsm8k_train_path']"
-TEST_FILES="['$math_test_path', '$gsm8k_test_path']"
+TEST_FILES="['$math_test_path', '$gsm8k_test_path', '$dapo_test_path']"
+TEST_FILES="['$math_train_path']"
 
 ############################ Parameter Groups ############################
 
@@ -100,6 +103,7 @@ ROLLOUT=(
     actor_rollout_ref.rollout.max_model_len=$MAX_NUM_TOKENS
     actor_rollout_ref.rollout.max_num_batched_tokens=$MAX_NUM_TOKENS
     actor_rollout_ref.rollout.n=$N_ROLLOUTS_PER_PROMPT
+    actor_rollout_ref.rollout.val_kwargs.temperature=1.0
 )
 
 REF=(

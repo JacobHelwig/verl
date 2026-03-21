@@ -18,6 +18,7 @@ Preprocess the AI-MO/NuminaMath-CoT dataset to parquet format.
 import argparse
 import json
 import os
+import random
 
 import datasets
 
@@ -70,6 +71,26 @@ def extract_solution(solution_str):
     return remove_boxed(boxed)
 
 
+def parse_sample_splits(sample_splits: str) -> set[str]:
+    return {split.strip() for split in sample_splits.split(",") if split.strip()}
+
+
+def get_split_sample_seed(base_seed: int, split_name: str) -> int:
+    return base_seed + sum(ord(ch) for ch in split_name)
+
+
+def sample_split_dataset(split_dataset, split_name: str, sample_size: int, sample_seed: int):
+    total_rows = len(split_dataset)
+    if sample_size is None or sample_size >= total_rows:
+        return split_dataset, None
+
+    split_seed = get_split_sample_seed(sample_seed, split_name)
+    rng = random.Random(split_seed)
+    sampled_indices = sorted(rng.sample(range(total_rows), sample_size))
+    sampled_dataset = split_dataset.select(sampled_indices)
+    return sampled_dataset, sampled_indices
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--local_dir", default=None)
@@ -78,9 +99,31 @@ if __name__ == "__main__":
     parser.add_argument(
         "--local_save_dir", default="~/data/numina_math_cot", help="The save directory for the preprocessed dataset."
     )
+    parser.add_argument(
+        "--sample_size",
+        type=int,
+        default=None,
+        help=(
+            "If set, randomly sample up to this many rows from each split listed in --sample_splits "
+            "before preprocessing."
+        ),
+    )
+    parser.add_argument(
+        "--sample_seed",
+        type=int,
+        default=42,
+        help="Random seed used for reproducible subset sampling.",
+    )
+    parser.add_argument(
+        "--sample_splits",
+        default="train",
+        help="Comma-separated split names to sample when --sample_size is set. Default: train",
+    )
 
     args = parser.parse_args()
     local_dataset_path = args.local_dataset_path
+    if args.sample_size is not None and args.sample_size <= 0:
+        raise ValueError("--sample_size must be > 0 when provided")
 
     data_source = "AI-MO/NuminaMath-CoT"
     print(f"Loading the {data_source} dataset from huggingface...", flush=True)
@@ -91,8 +134,9 @@ if __name__ == "__main__":
 
     instruction_following = '\nPlease reason step by step, and put your final answer within \\boxed{}.'
 
-    def make_map_fn(split):
+    def make_map_fn(split, sampled_indices=None):
         def process_fn(example, idx):
+            original_index = sampled_indices[idx] if sampled_indices is not None else idx
             question_raw = example.get("problem", "")
             question = question_raw + " " + instruction_following
 
@@ -106,7 +150,7 @@ if __name__ == "__main__":
                 "reward_model": {"style": "rule", "ground_truth": solution},
                 "extra_info": {
                     "split": split,
-                    "index": idx,
+                    "index": original_index,
                     "answer": answer_raw,
                     "question": question_raw,
                     "source": example.get("source"),
@@ -125,15 +169,51 @@ if __name__ == "__main__":
 
     local_dir = os.path.expanduser(local_save_dir)
     os.makedirs(local_dir, exist_ok=True)
+    sampled_split_names = parse_sample_splits(args.sample_splits)
+    subset_manifest = {
+        "data_source": data_source,
+        "sample_size": args.sample_size,
+        "sample_seed": args.sample_seed,
+        "sample_splits": sorted(sampled_split_names),
+        "splits": {},
+    }
 
     for split_name, split_dataset in dataset.items():
-        processed_dataset = split_dataset.map(
-            function=make_map_fn(split_name),
+        sampled_indices = None
+        dataset_to_process = split_dataset
+        if args.sample_size is not None and split_name in sampled_split_names:
+            dataset_to_process, sampled_indices = sample_split_dataset(
+                split_dataset=split_dataset,
+                split_name=split_name,
+                sample_size=args.sample_size,
+                sample_seed=args.sample_seed,
+            )
+            print(
+                f"Sampling split '{split_name}': selected {len(dataset_to_process)} / {len(split_dataset)} rows "
+                f"with seed {get_split_sample_seed(args.sample_seed, split_name)}",
+                flush=True,
+            )
+
+        subset_manifest["splits"][split_name] = {
+            "original_num_rows": len(split_dataset),
+            "saved_num_rows": len(dataset_to_process),
+            "sampled": sampled_indices is not None,
+        }
+
+        if sampled_indices is not None:
+            with open(os.path.join(local_dir, f"{split_name}_sampled_indices.json"), "w") as f:
+                json.dump(sampled_indices, f)
+
+        processed_dataset = dataset_to_process.map(
+            function=make_map_fn(split_name, sampled_indices=sampled_indices),
             with_indices=True,
-            remove_columns=split_dataset.column_names,
+            remove_columns=dataset_to_process.column_names,
         )
         processed_dataset.to_parquet(os.path.join(local_dir, f"{split_name}.parquet"))
 
         example = processed_dataset[0]
         with open(os.path.join(local_dir, f"{split_name}_example.json"), "w") as f:
             json.dump(example, f, indent=2)
+
+    with open(os.path.join(local_dir, "subset_manifest.json"), "w") as f:
+        json.dump(subset_manifest, f, indent=2)
