@@ -242,19 +242,19 @@ def compute_forward_kl_topk(
 
     # 1. split across cp groups (bsz, seqlen, topk) => (bsz, seqlen/cp_size, topk)
     if data_format == "thd":
-        teacher_topk_log_probs_cp_slit, *_ = preprocess_thd_no_padding(teacher_topk_log_probs, pre_process=True)
-        teacher_topk_ids_cp_slit, *_ = preprocess_thd_no_padding(teacher_topk_ids, pre_process=True)
+        teacher_topk_log_probs_cp_split, *_ = preprocess_thd_no_padding(teacher_topk_log_probs, pre_process=True)
+        teacher_topk_ids_cp_split, *_ = preprocess_thd_no_padding(teacher_topk_ids, pre_process=True)
     else:
-        teacher_topk_log_probs_cp_slit, *_ = preprocess_bshd_no_padding(teacher_topk_log_probs, pre_process=True)
-        teacher_topk_ids_cp_slit, *_ = preprocess_bshd_no_padding(teacher_topk_ids, pre_process=True)
-    assert teacher_topk_log_probs_cp_slit.shape[:2] == teacher_topk_ids_cp_slit.shape[:2] == student_logits.shape[:2]
+        teacher_topk_log_probs_cp_split, *_ = preprocess_bshd_no_padding(teacher_topk_log_probs, pre_process=True)
+        teacher_topk_ids_cp_split, *_ = preprocess_bshd_no_padding(teacher_topk_ids, pre_process=True)
+    assert teacher_topk_log_probs_cp_split.shape[:2] == teacher_topk_ids_cp_split.shape[:2] == student_logits.shape[:2]
 
     # 2. compute token-wise KL divergence across tp groups
     distillation_loss_config: DistillationLossConfig = config.distillation_loss
     distillation_losses, student_mass, teacher_mass = _VocabParallelKLDivergence.apply(
         student_logits,
-        teacher_topk_log_probs_cp_slit,
-        teacher_topk_ids_cp_slit,
+        teacher_topk_log_probs_cp_split,
+        teacher_topk_ids_cp_split,
         distillation_loss_config.log_prob_min_clamp,
     )
 
