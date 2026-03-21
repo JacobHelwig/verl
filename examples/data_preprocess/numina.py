@@ -217,3 +217,18 @@ if __name__ == "__main__":
 
     with open(os.path.join(local_dir, "subset_manifest.json"), "w") as f:
         json.dump(subset_manifest, f, indent=2)
+
+
+"""
+eval "$(conda shell.bash hook)"
+conda activate verl
+export PATH=$CONDA_PREFIX/bin:$PATH
+export DATA_PATH=$PWD/../verlData
+
+
+N=10000
+SAVE_DIR=$DATA_PATH/numina_math_cot_subset_10000
+
+python examples/data_preprocess/numina.py --local_save_dir $SAVE_DIR --sample_size $N --sample_seed 42
+"""
+
