@@ -29,12 +29,17 @@ def remove_boxed(s):
         assert s[: len(left)] == left
         return s[len(left) :]
 
-    left = "\\boxed{"
+    if "\\boxed{" in s:
+        left = "\\boxed{"
+        assert s[: len(left)] == left
+        return s[len(left) : -1]
+    
+    if "\\boxed" in s:
+        left = "\\boxed"
+        assert s[: len(left)] == left
+        return s[len(left) : ]
 
-    assert s[: len(left)] == left
-    assert s[-1] == "}"
-
-    return s[len(left) : -1]
+    raise ValueError(s)
 
 
 def last_boxed_only_string(string):
