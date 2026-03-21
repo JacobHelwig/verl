@@ -1201,7 +1201,7 @@ class RayPPOTrainer:
             batch_td = left_right_2_no_padding(batch_td)
             calculate_entropy = self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
             distillation_use_topk = (
-                self.distillation_config.distillation_loss.loss_settings.use_topk if self.distillation_config else False
+                self.distillation_config.distillation_loss.loss_settings.use_topk if self.use_teacher_policy else False
             )
             ppo_mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
             ppo_mini_batch_size = ppo_mini_batch_size * self.config.actor_rollout_ref.rollout.n
