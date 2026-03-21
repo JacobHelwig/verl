@@ -54,9 +54,15 @@ class RemoteRewardManager(RewardManagerBase):
         assert not self.is_async_reward_score, "Async reward score is not supported in remote reward manager. "
         self.reward_router_address = reward_router_address
         self.reward_model_tokenizer = reward_model_tokenizer
-        num_reward_workers = config.reward.num_workers
-        # in the rollout & reward parallel mode
-        # the sum of final reward workers will be agent_loop_workers * num_reward_workers
+        # `config.reward.num_workers` already controls the number of top-level
+        # RewardLoopWorkers created by RewardLoopManager. Reusing the same knob
+        # here multiplies the process count by `num_workers` again, which can
+        # leave nested RewardComputeWorkers permanently pending on a single node.
+        #
+        # Keep one isolated subprocess per RewardLoopWorker. If we want more
+        # fan-out later, it should use a dedicated config field instead of
+        # overloading `reward.num_workers`.
+        num_reward_workers = 1
         self.reward_worker = [
             # register the reward worker in the same node
             RewardComputeWorker.options(
