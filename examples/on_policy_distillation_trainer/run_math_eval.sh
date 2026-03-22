@@ -8,7 +8,7 @@ conda activate verl
 export PATH=$CONDA_PREFIX/bin:$PATH
 export NCCL_P2P_DISABLE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
+export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
 export DATA_PATH=$PWD/../verlData
 export HF_HOME=$DATA_PATH
 export VLLM_CACHE_DIR=$DATA_PATH/vllm_cache
@@ -31,7 +31,7 @@ PROJECT_NAME='verl_grpo_example_math'
 EXP_NAME="${MODEL}"
 
 MAX_PROMPT=1024
-MAX_RESPONSE_LENGTH=2048
+MAX_RESPONSE_LENGTH=4096
 MAX_NUM_TOKENS=$(( MAX_PROMPT + MAX_RESPONSE_LENGTH ))
 
 TRAIN_PROMPT_BSZ=600
@@ -55,9 +55,12 @@ math_test_path=$DATA_PATH/math/test.parquet
 
 dapo_test_path=$DATA_PATH/dapo_math_17k/train.parquet
 
-TRAIN_FILES="['$math_train_path', '$gsm8k_train_path']"
+numina_test_path=$DATA_PATH/numina_math_cot_subset_11000/train.parquet
+
+TRAIN_FILES="['$math_train_path']"
 TEST_FILES="['$math_test_path', '$gsm8k_test_path', '$dapo_test_path']"
 TEST_FILES="['$math_train_path']"
+TEST_FILES="['$numina_test_path']"
 
 ############################ Parameter Groups ############################
 

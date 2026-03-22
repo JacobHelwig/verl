@@ -21,59 +21,59 @@ import os
 import random
 
 import datasets
+from verl.utils.reward_score.math_verify import compute_score as math_verify_compute_score
 
 
 def remove_boxed(s):
-    if "\\boxed " in s:
-        left = "\\boxed "
-        assert s[: len(left)] == left
-        return s[len(left) :]
+    s = s.strip()
+    for left in ("\\boxed ", "\\boxed{", "\\boxed", "\\fbox{", "\\fbox"):
+        if not s.startswith(left):
+            continue
 
-    if "\\boxed{" in s:
-        left = "\\boxed{"
-        assert s[: len(left)] == left
-        return s[len(left) : -1]
-    
-    if "\\boxed" in s:
-        left = "\\boxed"
-        assert s[: len(left)] == left
-        return s[len(left) : ]
+        content = s[len(left) :]
+        if left.endswith("{") and content.endswith("}"):
+            content = content[:-1]
+        return content.strip()
 
-    raise ValueError(s)
+    return s
 
 
 def last_boxed_only_string(string):
-    idx = string.rfind("\\boxed")
-    if "\\boxed " in string:
-        return "\\boxed " + string.split("\\boxed ")[-1].split("$")[0]
+    boxed_idx = string.rfind("\\boxed")
+    fbox_idx = string.rfind("\\fbox")
+    idx = max(boxed_idx, fbox_idx)
     if idx < 0:
-        idx = string.rfind("\\fbox")
-        if idx < 0:
-            return None
+        return None
 
-    i = idx
-    right_brace_idx = None
-    num_left_braces_open = 0
-    while i < len(string):
-        if string[i] == "{":
-            num_left_braces_open += 1
-        if string[i] == "}":
-            num_left_braces_open -= 1
-            if num_left_braces_open == 0:
-                right_brace_idx = i
-                break
-        i += 1
+    token = "\\boxed" if boxed_idx >= fbox_idx else "\\fbox"
+    token_end = idx + len(token)
+    suffix = string[token_end:]
 
-    retval = None if right_brace_idx is None else string[idx : right_brace_idx + 1]
+    if suffix.startswith(" "):
+        return (token + " " + suffix[1:].split("$", 1)[0]).rstrip()
 
-    return retval
+    if suffix.startswith("{"):
+        depth = 0
+        for offset, ch in enumerate(suffix):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return string[idx : token_end + offset + 1]
+
+    return string[idx:].split("$", 1)[0].rstrip()
 
 
 def extract_solution(solution_str):
     boxed = last_boxed_only_string(solution_str)
     if boxed is None:
-        return solution_str
-    return remove_boxed(boxed)
+        return None, None, "missing_boxed_answer"
+
+    candidate = remove_boxed(boxed)
+    if math_verify_compute_score(solution_str, candidate):
+        return candidate, candidate, None
+    return None, candidate, "unverifiable_boxed_answer"
 
 
 def parse_sample_splits(sample_splits: str) -> set[str]:
@@ -146,7 +146,7 @@ if __name__ == "__main__":
             question = question_raw + " " + instruction_following
 
             answer_raw = example.get("solution")
-            solution = extract_solution(answer_raw)
+            solution, parsed_candidate, skip_reason = extract_solution(answer_raw)
 
             data = {
                 "data_source": data_source,
@@ -161,6 +161,8 @@ if __name__ == "__main__":
                     "source": example.get("source"),
                     "source_messages": example.get("messages"),
                 },
+                "parsed_candidate": parsed_candidate,
+                "skip_reason": skip_reason,
             }
             return data
 
@@ -174,6 +176,7 @@ if __name__ == "__main__":
 
     local_dir = os.path.expanduser(local_save_dir)
     os.makedirs(local_dir, exist_ok=True)
+    unverifiable_path = os.path.join(local_dir, "unverifiable")
     sampled_split_names = parse_sample_splits(args.sample_splits)
     subset_manifest = {
         "data_source": data_source,
@@ -182,46 +185,91 @@ if __name__ == "__main__":
         "sample_splits": sorted(sampled_split_names),
         "splits": {},
     }
+    total_retained = 0
+    total_skipped = 0
 
-    for split_name, split_dataset in dataset.items():
-        sampled_indices = None
-        dataset_to_process = split_dataset
-        if args.sample_size is not None and split_name in sampled_split_names:
-            dataset_to_process, sampled_indices = sample_split_dataset(
-                split_dataset=split_dataset,
-                split_name=split_name,
-                sample_size=args.sample_size,
-                sample_seed=args.sample_seed,
+    with open(unverifiable_path, "w") as unverifiable_file:
+        for split_name, split_dataset in dataset.items():
+            sampled_indices = None
+            dataset_to_process = split_dataset
+            if args.sample_size is not None and split_name in sampled_split_names:
+                dataset_to_process, sampled_indices = sample_split_dataset(
+                    split_dataset=split_dataset,
+                    split_name=split_name,
+                    sample_size=args.sample_size,
+                    sample_seed=args.sample_seed,
+                )
+                print(
+                    f"Sampling split '{split_name}': selected {len(dataset_to_process)} / {len(split_dataset)} rows "
+                    f"with seed {get_split_sample_seed(args.sample_seed, split_name)}",
+                    flush=True,
+                )
+
+            if sampled_indices is not None:
+                with open(os.path.join(local_dir, f"{split_name}_sampled_indices.json"), "w") as f:
+                    json.dump(sampled_indices, f)
+
+            processed_dataset = dataset_to_process.map(
+                function=make_map_fn(split_name, sampled_indices=sampled_indices),
+                with_indices=True,
+                remove_columns=dataset_to_process.column_names,
             )
+
+            retained_indices = []
+            split_retained = 0
+            split_skipped = 0
+            for idx, example in enumerate(processed_dataset):
+                if example["skip_reason"] is None:
+                    retained_indices.append(idx)
+                    split_retained += 1
+                    continue
+
+                split_skipped += 1
+                json.dump(
+                    {
+                        "split": split_name,
+                        "index": example["extra_info"]["index"],
+                        "skip_reason": example["skip_reason"],
+                        "parsed_candidate": example["parsed_candidate"],
+                        "answer": example["extra_info"]["answer"],
+                        "question": example["extra_info"]["question"],
+                        "source": example["extra_info"]["source"],
+                        "source_messages": example["extra_info"]["source_messages"],
+                    },
+                    unverifiable_file,
+                )
+                unverifiable_file.write("\n")
+
+            retained_dataset = processed_dataset.select(retained_indices).remove_columns(
+                ["parsed_candidate", "skip_reason"]
+            )
+            retained_dataset.to_parquet(os.path.join(local_dir, f"{split_name}.parquet"))
+
+            subset_manifest["splits"][split_name] = {
+                "original_num_rows": len(split_dataset),
+                "saved_num_rows": split_retained,
+                "sampled": sampled_indices is not None,
+                "skipped_num_rows": split_skipped,
+            }
+            total_retained += split_retained
+            total_skipped += split_skipped
+
             print(
-                f"Sampling split '{split_name}': selected {len(dataset_to_process)} / {len(split_dataset)} rows "
-                f"with seed {get_split_sample_seed(args.sample_seed, split_name)}",
+                f"Split '{split_name}': retained {split_retained} examples, skipped {split_skipped} unverifiable examples",
                 flush=True,
             )
 
-        subset_manifest["splits"][split_name] = {
-            "original_num_rows": len(split_dataset),
-            "saved_num_rows": len(dataset_to_process),
-            "sampled": sampled_indices is not None,
-        }
-
-        if sampled_indices is not None:
-            with open(os.path.join(local_dir, f"{split_name}_sampled_indices.json"), "w") as f:
-                json.dump(sampled_indices, f)
-
-        processed_dataset = dataset_to_process.map(
-            function=make_map_fn(split_name, sampled_indices=sampled_indices),
-            with_indices=True,
-            remove_columns=dataset_to_process.column_names,
-        )
-        processed_dataset.to_parquet(os.path.join(local_dir, f"{split_name}.parquet"))
-
-        example = processed_dataset[0]
-        with open(os.path.join(local_dir, f"{split_name}_example.json"), "w") as f:
-            json.dump(example, f, indent=2)
+            if split_retained > 0:
+                example = retained_dataset[0]
+                with open(os.path.join(local_dir, f"{split_name}_example.json"), "w") as f:
+                    json.dump(example, f, indent=2)
 
     with open(os.path.join(local_dir, "subset_manifest.json"), "w") as f:
         json.dump(subset_manifest, f, indent=2)
+
+    print(f"Retained examples: {total_retained}", flush=True)
+    print(f"Skipped examples: {total_skipped}", flush=True)
+    print(f"Unverifiable log: {unverifiable_path}", flush=True)
 
 
 """
@@ -231,9 +279,8 @@ export PATH=$CONDA_PREFIX/bin:$PATH
 export DATA_PATH=$PWD/../verlData
 
 
-N=10000
-SAVE_DIR=$DATA_PATH/numina_math_cot_subset_10000
+N=11000
+SAVE_DIR=$DATA_PATH/numina_math_cot_subset_$N
 
 python examples/data_preprocess/numina.py --local_save_dir $SAVE_DIR --sample_size $N --sample_seed 42
 """
-
