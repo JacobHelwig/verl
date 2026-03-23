@@ -239,6 +239,8 @@ class AsyncTeacherLLMServerManager(AsyncLLMServerManager):
             image_data=multi_modal_data.get("images"),
             video_data=multi_modal_data.get("videos"),
         )
+        # Shapes: # S, (1 or K), where S is the response length, K is either 1 or topk depending on
+        # the distillation loss settings.
         teacher_ids = torch.tensor(teacher_output.extra_fields["prompt_ids"], dtype=torch.int32)
         teacher_logprobs = torch.tensor(teacher_output.extra_fields["prompt_logprobs"])
         assert teacher_ids.shape[0] == teacher_logprobs.shape[0] == len(prompt_ids + response_ids)
