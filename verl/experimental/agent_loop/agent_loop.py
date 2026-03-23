@@ -184,6 +184,7 @@ def _get_teacher_sampling_params(
         "prompt_logprobs": num_logprobs,
     }
 
+
 def _pad_teacher_outputs(
     teacher_ids: torch.Tensor,
     teacher_logprobs: torch.Tensor,
@@ -245,6 +246,7 @@ class AsyncTeacherLLMServerManager(AsyncLLMServerManager):
         teacher_logprobs = torch.tensor(teacher_output.extra_fields["prompt_logprobs"])
         assert teacher_ids.shape[0] == teacher_logprobs.shape[0] == len(prompt_ids + response_ids)
         return teacher_ids, teacher_logprobs
+
 
 class AgentLoopMetrics(BaseModel):
     """Agent loop performance metrics."""
@@ -524,10 +526,10 @@ class AgentLoopWorker:
                     load_balancer_handle=teacher_load_balancer_handle,
                     distillation_config=self.distillation_config,
                     pad_token_id=self.tokenizer.pad_token_id,
-                )            
+                )
         else:
             self.teacher_server_manager = None
-        
+
         # for recipe to change
         if not hasattr(self, "server_manager"):
             self.server_manager = AsyncLLMServerManager(
