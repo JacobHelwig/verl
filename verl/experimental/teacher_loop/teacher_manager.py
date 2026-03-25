@@ -66,6 +66,7 @@ def _pad_teacher_outputs(
 def _unpad_teacher_inputs(data: DataProto) -> tuple[list[int], int, int]:
     """Unpad valid sequence ids and prompt/response lengths from a single sample.
     The sample is a left-padded prompt concatenated with a right-padded response.
+    TODO(wuxibin): remove padding and use tensordict.
     """
     assert len(data) == 1, "Teacher logprob computation expects a single sample"
 
