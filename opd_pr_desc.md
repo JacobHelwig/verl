@@ -200,7 +200,7 @@ hi codex, I hope that we can add docs for on-policy distillation implementation.
 
 2. Please add a markdown doc summarizing the changes made in this PR
 
-3. Please find where we should add the doc. Personally, I think the best place to it will be under docs/algo, following the style of docs/algo/grpo.md
+3. Please find where we should add the doc. Personally, I think the best place to it will be under docs/algo, following the styles of docs/algo/grpo.md 
 
 4. After finding a good location and a reference doc, please create the OPD doc by following the style of the reference doc.  
 
