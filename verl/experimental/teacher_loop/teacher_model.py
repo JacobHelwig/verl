@@ -71,6 +71,10 @@ class TeacherModelManager:
         rollout_config = teacher_model_config.inference
         model_config = HFModelConfig(path=teacher_model_config.model_path)
         self.tokenizer = model_config.get_processor()
+        text_tokenizer = model_config.tokenizer 
+        if model_config.tokenizer is None:
+            raise ValueError(f"Tokenizer is required for teacher model {teacher_model_config.model_path}")
+        self.pad_token_id = text_tokenizer.pad_token_id
         self.rollout_replicas = [
             rollout_replica_class(
                 replica_rank=replica_rank,
@@ -107,7 +111,7 @@ class TeacherModelManager:
             servers=list(zip(self.server_addresses, self.server_handles, strict=True)),
             load_balancer_handle=self.load_balancer_handle,
             distillation_config=self.config,
-            pad_token_id=self.tokenizer.pad_token_id,
+            pad_token_id=self.pad_token_id,
         )
 
     def _initialize_router(self):
