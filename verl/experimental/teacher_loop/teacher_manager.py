@@ -168,8 +168,8 @@ class AsyncTeacherLLMServerManager(AsyncLLMServerManager):
 
         batch = TensorDict(
             {
-                "teacher_ids": torch.stack(padded_teacher_ids),
-                "teacher_logprobs": torch.stack(padded_teacher_logprobs),
+                "teacher_ids": torch.cat(padded_teacher_ids),
+                "teacher_logprobs": torch.cat(padded_teacher_logprobs),
             },
             batch_size=len(data),
         )
