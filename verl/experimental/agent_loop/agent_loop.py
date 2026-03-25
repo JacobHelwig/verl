@@ -922,8 +922,8 @@ class AgentLoopWorker:
         if any(mmi is not None for mmi in multi_modal_inputs_list):
             non_tensor_batch["multi_modal_inputs"] = np.array(multi_modal_inputs_list, dtype=object)
 
-        # if distillation is enabled but not streaming teacher with rollout, store teacher multi-modal data for
-        # batched logprob computation.
+        # if distillation is enabled but not streaming teacher with rollout, store multi-modal data for
+        # batched teacher logprob computation.
         if self.distillation_enabled and not self.stream_teacher_with_rollout:
             teacher_multi_modal_data = [input.multi_modal_data for input in inputs]
             non_tensor_batch["teacher_multi_modal_data"] = np.array(teacher_multi_modal_data, dtype=object)
