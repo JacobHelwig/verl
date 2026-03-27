@@ -735,7 +735,6 @@ algorithm:
 distillation:
   _target_: verl.workers.config.DistillationConfig
   enabled: false
-  num_workers: 8
   distillation_loss:
     _target_: verl.workers.config.DistillationLossConfig
     loss_mode: k3
@@ -749,11 +748,13 @@ distillation:
     clip_ratio: 0.2
     clip_ratio_low: 0.2
     clip_ratio_high: 0.2
+  enable_resource_pool: false
+  n_gpus_per_node: 8
+  nnodes: 0
+  teacher_models: {}
   teacher_model:
     _target_: verl.workers.config.DistillationTeacherModelConfig
-    enable_resource_pool: false
-    n_gpus_per_node: 8
-    nnodes: 0
+    task: null
     model_path: null
     inference:
       _target_: verl.workers.config.RolloutConfig
