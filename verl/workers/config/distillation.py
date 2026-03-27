@@ -131,6 +131,8 @@ class DistillationTeacherModelConfig(BaseConfig):
 
     def is_configured(self, is_multi: bool) -> bool:
         configured = self.model_path is not None
+        if self.task is not None and not configured:
+            raise ValueError(f"{self.task=} is set but model_path is not set for this teacher model config.")
         if is_multi and configured and self.task is None:
             raise ValueError("task must be specified for multi-teacher setups.")
         return configured
