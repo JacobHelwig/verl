@@ -44,6 +44,8 @@ ENFORCE_EAGER=True # true for faster debugging
 
 ############################ Paths ############################
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 gsm8k_train_path=$DATA_PATH/gsm8k/train.parquet
 gsm8k_test_path=$DATA_PATH/gsm8k/test.parquet
 
@@ -75,17 +77,17 @@ MODEL=(
 DISTILLATION=(
     distillation.enabled=True
     distillation.num_workers=8
-    distillation.teacher_model.enable_resource_pool=$TEACHER_RESOURCE_POOL
-    distillation.teacher_model.n_gpus_per_node=$TEACHER_WORLD_SIZE
-    distillation.teacher_model.nnodes=1
-    distillation.teacher_model.model_path="${FAMILY}/${TEACHER_MODEL}"
-    distillation.teacher_model.inference.tensor_model_parallel_size=1
-    distillation.teacher_model.inference.name=$ROLLOUT_NAME
-    distillation.teacher_model.inference.gpu_memory_utilization=0.3
-    distillation.teacher_model.inference.enforce_eager=$ENFORCE_EAGER
-    distillation.teacher_model.inference.max_model_len=$MAX_NUM_TOKENS
-    distillation.teacher_model.inference.max_num_batched_tokens=$MAX_NUM_TOKENS
-    distillation.teacher_model.inference.max_num_seqs=$MAX_NUM_TOKENS
+    # distillation.teacher_model.enable_resource_pool=$TEACHER_RESOURCE_POOL
+    # distillation.teacher_model.n_gpus_per_node=$TEACHER_WORLD_SIZE
+    # distillation.teacher_model.nnodes=1
+    # distillation.teacher_model.model_path="${FAMILY}/${TEACHER_MODEL}"
+    # distillation.teacher_model.inference.tensor_model_parallel_size=1
+    # distillation.teacher_model.inference.name=$ROLLOUT_NAME
+    # distillation.teacher_model.inference.gpu_memory_utilization=0.3
+    # distillation.teacher_model.inference.enforce_eager=$ENFORCE_EAGER
+    # distillation.teacher_model.inference.max_model_len=$MAX_NUM_TOKENS
+    # distillation.teacher_model.inference.max_num_batched_tokens=$MAX_NUM_TOKENS
+    # distillation.teacher_model.inference.max_num_seqs=$MAX_NUM_TOKENS
     distillation.distillation_loss.loss_mode=$DISTILLATION_LOSS_MODE
     distillation.distillation_loss.topk=64
     distillation.distillation_loss.use_task_rewards=False
@@ -146,6 +148,8 @@ TRAINER=(
 python3 -m verl.trainer.main_ppo \
     --config-path=config \
     --config-name='ppo_trainer.yaml' \
+    "hydra.searchpath=[file://${SCRIPT_DIR}]" \
+    +config@distillation.teacher_model=teacher_model \
     "${DATA[@]}" \
     "${ALGORITHM[@]}" \
     "${MODEL[@]}" \

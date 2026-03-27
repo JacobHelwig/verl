@@ -40,6 +40,7 @@ defaults:
 
   # distillation config
   - distillation@distillation: distillation
+  - distillation@distillation.teacher_model: teacher_model
 
   # load the reference default config, then apply the fields in the current yaml
   # self config override anything above
