@@ -129,37 +129,39 @@ class DistillationTeacherModelConfig(BaseConfig):
     model_path: Optional[str] = None
     inference: RolloutConfig = field(default_factory=RolloutConfig)
 
-    def is_configured(self) -> bool:
-        return self.model_path is not None or self.task is not None
+    def is_configured(self, is_multi: bool) -> bool:
+        configured = self.model_path is not None
+        if is_multi and configured and self.task is None:
+            raise ValueError("task must be specified for multi-teacher setups.")
+        return configured
 
-    def validate_and_prepare_for_distillation(self, enabled: bool, use_topk: bool, topk: Optional[int]) -> None:
+    def validate_and_prepare_for_distillation(self, use_topk: bool, topk: Optional[int]) -> None:
         # Prompt + Response from student are fed into teacher as context
         max_model_len = self.inference.max_model_len
         max_num_batched_tokens = self.inference.max_num_batched_tokens
         student_prompt_length = self.inference.prompt_length
         student_response_length = self.inference.response_length
-        if enabled:
-            required_context_len = student_prompt_length + student_response_length + 1
-            if max_model_len is not None and required_context_len > max_model_len:
-                raise ValueError(
-                    "Distillation teacher inference requires room for the student prompt, the full student "
-                    f"response, and one generated token, but got {student_prompt_length=}, "
-                    f"{student_response_length=}, {required_context_len=}, {max_model_len=}."
-                )
-            if max_num_batched_tokens is not None and required_context_len > max_num_batched_tokens:
-                raise ValueError(
-                    "Distillation teacher inference requires room for the student prompt, the full student "
-                    f"response, and one generated token within the engine batching budget, but got "
-                    f"{student_prompt_length=}, {student_response_length=}, {required_context_len=}, "
-                    f"{max_num_batched_tokens=}."
-                )
+        required_context_len = student_prompt_length + student_response_length + 1
+        if max_model_len is not None and required_context_len > max_model_len:
+            raise ValueError(
+                "Distillation teacher inference requires room for the student prompt, the full student "
+                f"response, and one generated token, but got {student_prompt_length=}, "
+                f"{student_response_length=}, {required_context_len=}, {max_model_len=}."
+            )
+        if max_num_batched_tokens is not None and required_context_len > max_num_batched_tokens:
+            raise ValueError(
+                "Distillation teacher inference requires room for the student prompt, the full student "
+                f"response, and one generated token within the engine batching budget, but got "
+                f"{student_prompt_length=}, {student_response_length=}, {required_context_len=}, "
+                f"{max_num_batched_tokens=}."
+            )
 
         self.inference.prompt_length = self.inference.prompt_length + self.inference.response_length
         self.inference.response_length = 1
-        self._validate_topk_logprobs(enabled=enabled, use_topk=use_topk, topk=topk)
+        self._validate_topk_logprobs(use_topk=use_topk, topk=topk)
 
-    def _validate_topk_logprobs(self, enabled: bool, use_topk: bool, topk: Optional[int]) -> None:
-        if not enabled or not use_topk or topk is None:
+    def _validate_topk_logprobs(self, use_topk: bool, topk: Optional[int]) -> None:
+        if not use_topk or topk is None:
             return
 
         # Ensure max log probs is aligned with top-k
@@ -224,11 +226,13 @@ class DistillationConfig(BaseConfig):
     teacher_models: dict[str, DistillationTeacherModelConfig] = field(default_factory=dict)
 
     def __post_init__(self):
+        if not self.enabled:
+            return
+
         self.teacher_models.clear()
         self.teacher_models.update(self._resolve_distillation_models())
         for teacher_model in self.teacher_models.values():
             teacher_model.validate_and_prepare_for_distillation(
-                enabled=self.enabled,
                 use_topk=self.distillation_loss.loss_settings.use_topk,
                 topk=self.distillation_loss.topk,
             )
@@ -240,7 +244,7 @@ class DistillationConfig(BaseConfig):
         for idx in range(MAX_NUM_TEACHERS):
             key = f"teacher_model{idx}"
             teacher_model = self.get_teacher_cfg(idx)
-            if teacher_model.is_configured():
+            if teacher_model.is_configured(is_multi=True):
                 models[key] = teacher_model
         return models
 
@@ -261,11 +265,11 @@ class DistillationConfig(BaseConfig):
 
     def _resolve_distillation_models(self) -> dict[str, DistillationTeacherModelConfig]:
         multi_teachers = self.get_multi_teachers()
-        if self.teacher_model.is_configured() and multi_teachers:
+        if self.teacher_model.is_configured(is_multi=False) and multi_teachers:
             raise ValueError("Specify either distillation.teacher_model or distillation.teacher_model{k}, not both.")
         if multi_teachers:
             return multi_teachers
-        if not self.teacher_model.is_configured():
+        if not self.teacher_model.is_configured(is_multi=False):
             raise ValueError(
                 "No distillation teacher model configured. Please configure at least one "
                 "teacher model in the distillation config."
