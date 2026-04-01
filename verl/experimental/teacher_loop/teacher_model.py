@@ -165,15 +165,15 @@ class MultiTeacherModelManager:
         self.teacher_model_manager = TeacherModelManager(
             teacher_model_config=self.distillation_config.teacher_model, resource_pool=self.resource_pool
         )
+        self.server_addresses = self.teacher_model_manager.server_addresses
+        self.server_handles = self.teacher_model_manager.server_handles
 
     def _initialize_async_server_manager(self):
         """TODO: MOPD -- balancers/servers become a dict (one per teacher)"""
         from verl.experimental.teacher_loop.teacher_manager import AsyncTeacherLLMServerManager
 
         self.load_balancer_handle = self.teacher_model_manager.load_balancer_handle
-        server_addresses = self.teacher_model_manager.server_addresses
-        server_handles = self.teacher_model_manager.server_handles
-        servers = list(zip(server_addresses, server_handles, strict=True))
+        servers = list(zip(self.server_addresses, self.server_handles, strict=True))
 
         # In standalone mode, server manager is initialized in the agent loop
         if not self.distillation_config.teacher_model.enable_resource_pool:
