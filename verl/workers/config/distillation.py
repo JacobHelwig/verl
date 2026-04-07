@@ -155,8 +155,11 @@ class DistillationTeacherModelConfig(BaseConfig):
         self._validate_topk_logprobs(use_topk=use_topk, topk=topk)
 
     def _validate_topk_logprobs(self, use_topk: bool, topk: Optional[int]) -> None:
-        if not use_topk or topk is None:
+        if not use_topk:
             return
+
+        if topk is None:
+            raise ValueError("topk must be specified when use_topk is True.")
 
         engine_name = self.inference.name
         engine_kwargs = self.inference.engine_kwargs
