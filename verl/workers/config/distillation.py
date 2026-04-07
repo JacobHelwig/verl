@@ -139,7 +139,6 @@ class DistillationTeacherModelConfig(BaseConfig):
         return configured
 
     def validate_and_prepare_for_distillation(self, use_topk: bool, topk: Optional[int]) -> None:
-
         # Prompt + Response from student are fed into teacher as context
         max_model_len = self.inference.max_model_len
         student_prompt_length = self.inference.prompt_length
