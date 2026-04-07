@@ -157,7 +157,6 @@ class DistillationTeacherModelConfig(BaseConfig):
     def _validate_topk_logprobs(self, use_topk: bool, topk: Optional[int]) -> None:
         if not use_topk:
             return
-
         if topk is None:
             raise ValueError("topk must be specified when use_topk is True.")
 
@@ -233,21 +232,15 @@ class DistillationConfig(BaseConfig):
         return next(iter(self.teacher_models.values()))
 
     def _resolve_teacher_models(self) -> dict[str, DistillationTeacherModelConfig]:
-        if self.teacher_model.is_configured(is_multi=False) and self.teacher_models:
-            raise ValueError("Specify either distillation.teacher_model or distillation.teacher_models, not both.")
-
-        teacher_models = {}
-        for model_name, teacher_model in self.teacher_models.items():
-            teacher_model = omega_conf_to_dataclass(teacher_model, dataclass_type=DistillationTeacherModelConfig)
-            if teacher_model.is_configured(is_multi=True):
-                teacher_models[model_name] = teacher_model
-        if teacher_models:
+        if self.teacher_models:
             if self.teacher_model.is_configured(is_multi=False):
-                raise ValueError(
-                    "Multiple teacher models are configured in distillation.teacher_models, "
-                    "but distillation.teacher_model is also configured."
-                )
-            return teacher_models
+                raise ValueError("Specify either distillation.teacher_model or distillation.teacher_models, not both.")
+            teacher_models = {}
+            for model_name, teacher_model in self.teacher_models.items():
+                teacher_model = omega_conf_to_dataclass(teacher_model, dataclass_type=DistillationTeacherModelConfig)
+                if teacher_model.is_configured(is_multi=True):
+                    teacher_models[model_name] = teacher_model
+                return teacher_models
 
         if not self.teacher_model.is_configured(is_multi=False):
             raise ValueError(
