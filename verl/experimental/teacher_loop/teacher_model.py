@@ -177,8 +177,7 @@ class MultiTeacherModelManager:
         Initialize the multi-teacher model manager.
 
         Args:
-            config (DictConfig): Full configuration (needed so AsyncTeacherLLMServerManager callers
-                can read `distillation` / `teacher_key` without reconstructing the config).
+            config (DictConfig): Full configuration.
             resource_pool (RayResourcePool): Combined resource pool for all teachers.
         """
         self.config = config
@@ -196,9 +195,6 @@ class MultiTeacherModelManager:
         teacher_models = self.distillation_config.teacher_models
         split_sizes = [teacher.world_size for teacher in teacher_models.values()]
         split_pools = split_resource_pool(self.resource_pool, split_size=split_sizes)
-        assert len(split_pools) == len(teacher_models), (
-            f"split_resource_pool returned {len(split_pools)} pools for {len(teacher_models)} teachers."
-        )
 
         for (_, teacher_model_config), teacher_pool in zip(teacher_models.items(), split_pools, strict=True):
             manager = TeacherModelManager(

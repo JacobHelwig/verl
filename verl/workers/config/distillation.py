@@ -117,7 +117,7 @@ class DistillationTeacherModelConfig(BaseConfig):
     """Configuration for on-policy distillation teacher.
 
     key (str, optional):
-        Identifier to route examples to the teacher model in future multi-teacher support.
+        Identifier to route examples to the teacher model in multi-teacher setting.
     model_path (str, optional):
         Model path for the teacher model. Can be a local path or a Hugging Face model
     inference (RolloutConfig):
