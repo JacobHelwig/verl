@@ -122,9 +122,15 @@ class TeacherModelManager:
     def _validate_replica_node_alignment(self, replica_pools, per_replica_world_size, gpus_per_node):
         """Verify that each replica occupies the expected number of nodes.
 
+        `per_replica_world_size` (W below) is the GPU count of a *single* inference
+        replica — the product of the replica's inference-time parallelism
+        (tensor_model_parallel_size * data_parallel_size * pipeline_model_parallel_size).
+        It is not the teacher's total GPU budget (`teacher.world_size`), which sums
+        across replicas.
+
         `split_resource_pool` walks bundles linearly and is oblivious to node
-        boundaries, so a replica's sub-pool can end up touching more nodes
-        than its `world_size` implies.
+        boundaries, so a replica's sub-pool can end up touching more nodes than W
+        implies when W does not divide the node layout cleanly.
 
         Example (P = n_gpus_per_node = 4, two teachers with W=3 and W=4):
 
@@ -136,9 +142,8 @@ class TeacherModelManager:
             teacher B (W=4):
                 [. . . B]               [B B B .]          expected span 1, observed 2  ✗
 
-        Teacher B's one replica (W=4) is expected to stay on a single node,
-        but the linear split dropped it on bundles 3-6 — straddling nodes 0
-        and 1.
+        Teacher B's one replica (W=4) is expected to stay on a single node, but the
+        linear split dropped it on bundles 3-6 — straddling nodes 0 and 1.
         """
         key = self.teacher_model_config.key
         P = gpus_per_node
