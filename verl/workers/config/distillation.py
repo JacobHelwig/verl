@@ -122,27 +122,27 @@ class DistillationTeacherModelConfig(BaseConfig):
         Model path for the teacher model. Can be a local path or a Hugging Face model
     inference (RolloutConfig):
         Rollout configuration for the teacher model inference during distillation.
-    n_gpus_per_node (int):
-        Number of GPUs per node for this teacher to use in the teacher resource pool.
-        Note that the total number of GPUs allocated to this teacher model will be
-        n_gpus_per_node * nnodes, where nnodes is specified in DistillationConfig for
-        standalone mode and in the trainer config for collocate mode.
+    world_size (int):
+        Total number of GPUs allocated to this teacher (sum across nodes). The teacher's
+        own data/tensor/pipeline parallel sizes (inference.data_parallel_size,
+        inference.tensor_model_parallel_size, inference.pipeline_model_parallel_size)
+        determine how many replicas fit: num_replicas = world_size / (DP * TP * PP).
     """
 
-    _mutable_fields = BaseConfig._mutable_fields | {"n_gpus_per_node", "key"}
+    _mutable_fields = BaseConfig._mutable_fields | {"world_size", "key"}
 
     key: Optional[str] = None
     model_path: Optional[str] = None
     inference: RolloutConfig = field(default_factory=RolloutConfig)
-    n_gpus_per_node: Optional[int] = 0
+    world_size: Optional[int] = 0
 
     def check_configured(self):
         if self.model_path is None:
             raise ValueError("model_path must be specified for distillation teacher model config.")
         if self.key is None:
             raise ValueError("key must be specified for distillation teacher model config.")
-        if self.n_gpus_per_node is None:
-            raise ValueError("n_gpus_per_node must be specified for distillation teacher model config.")
+        if self.world_size is None:
+            raise ValueError("world_size must be specified for distillation teacher model config.")
 
     def validate_and_prepare_for_distillation(self, use_topk: bool, topk: Optional[int]) -> None:
         # Prompt + Response from student are fed into teacher as context
@@ -220,17 +220,18 @@ class DistillationConfig(BaseConfig):
             return
 
         self.teacher_models = self._resolve_teacher_models()
-        ngpus_per_node = 0
+        teacher_world_size_sum = 0
         for teacher_model in self.teacher_models.values():
             teacher_model.validate_and_prepare_for_distillation(
                 use_topk=self.distillation_loss.loss_settings.use_topk,
                 topk=self.distillation_loss.topk,
             )
-            ngpus_per_node += teacher_model.n_gpus_per_node
-        if ngpus_per_node != self.n_gpus_per_node:
+            teacher_world_size_sum += teacher_model.world_size
+        total_pool_size = self.n_gpus_per_node * self.nnodes
+        if teacher_world_size_sum != total_pool_size:
             raise ValueError(
-                f"Sum of teacher model n_gpus_per_node ({ngpus_per_node}) must match distillation config "
-                f"n_gpus_per_node ({self.n_gpus_per_node})."
+                f"Sum of teacher world_size ({teacher_world_size_sum}) must match the distillation "
+                f"resource pool size ({self.n_gpus_per_node=} * {self.nnodes=} = {total_pool_size})."
             )
         if len(self.teacher_models) != 1:
             raise NotImplementedError("Multiple teacher models are not supported yet in the runtime path.")
@@ -245,9 +246,9 @@ class DistillationConfig(BaseConfig):
     def _resolve_teacher_models(self) -> dict[str, DistillationTeacherModelConfig]:
         assert "teacher_model" in self.teacher_models
         if len(self.teacher_models) == 1:
-            # GPUs for single teacher is taken from distillation config
+            # Single teacher occupies the entire teacher resource pool.
             teacher_model = self.teacher_models["teacher_model"]
-            teacher_model.n_gpus_per_node = self.n_gpus_per_node
+            teacher_model.world_size = self.n_gpus_per_node * self.nnodes
             teacher_model.key = "default"
         else:
             # Multiple teachers: remove default single teacher config

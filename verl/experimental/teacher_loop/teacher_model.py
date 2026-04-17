@@ -81,7 +81,7 @@ class TeacherModelManager:
                 replica_rank=replica_rank,
                 config=rollout_config,
                 model_config=model_config,
-                gpus_per_node=teacher_model_config.n_gpus_per_node,
+                gpus_per_node=teacher_model_config.world_size,
                 is_teacher_model=True,
             )
             for replica_rank in range(num_replicas)
