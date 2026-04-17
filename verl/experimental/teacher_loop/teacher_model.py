@@ -85,6 +85,7 @@ class TeacherModelManager:
         rollout_config = teacher_model_config.inference
         model_config = HFModelConfig(path=teacher_model_config.model_path)
         self.tokenizer = model_config.get_processor()
+        name_suffix = (teacher_model_config.key or "").replace("/", "_")
         self.rollout_replicas = [
             rollout_replica_class(
                 replica_rank=replica_rank,
@@ -92,6 +93,7 @@ class TeacherModelManager:
                 model_config=model_config,
                 gpus_per_node=teacher_model_config.world_size,
                 is_teacher_model=True,
+                name_suffix=name_suffix,
             )
             for replica_rank in range(num_replicas)
         ]
