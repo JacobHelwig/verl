@@ -81,6 +81,10 @@ class TeacherModelManager:
             )
         num_replicas = world_size // teacher_world_size
 
+        # Per-node GPU count for the teacher resource pool. Passed to RolloutReplica so it
+        # computes nnodes correctly for replicas that span multiple nodes.
+        gpus_per_node = self.distillation_config.n_gpus_per_node
+
         rollout_replica_class = get_rollout_replica_class(teacher_model_config.inference.name)
         rollout_config = teacher_model_config.inference
         model_config = HFModelConfig(path=teacher_model_config.model_path)
@@ -91,7 +95,7 @@ class TeacherModelManager:
                 replica_rank=replica_rank,
                 config=rollout_config,
                 model_config=model_config,
-                gpus_per_node=teacher_model_config.world_size,
+                gpus_per_node=gpus_per_node,
                 is_teacher_model=True,
                 name_suffix=name_suffix,
             )
@@ -99,6 +103,7 @@ class TeacherModelManager:
         ]
         split_resource_pools = split_resource_pool(self.resource_pool, split_size=teacher_world_size)
         assert len(split_resource_pools) == len(self.rollout_replicas)
+        self._validate_replica_node_alignment(split_resource_pools, teacher_world_size, gpus_per_node)
         _run_all(
             [
                 server.init_colocated(resource_pool)
@@ -107,6 +112,45 @@ class TeacherModelManager:
         )
         self.server_handles = [server._server_handle for server in self.rollout_replicas]
         self.server_addresses = [server._server_address for server in self.rollout_replicas]
+
+    def _validate_replica_node_alignment(self, replica_pools, per_replica_world_size, gpus_per_node):
+        """Verify that each replica occupies the expected number of nodes.
+
+        `split_resource_pool` walks bundles linearly and is oblivious to node
+        boundaries, so a replica's sub-pool can end up touching more nodes
+        than its `world_size` implies.
+
+        Example (P = n_gpus_per_node = 4, two teachers with W=3 and W=4):
+
+                node 0                  node 1
+                [0 1 2 3]               [4 5 6 7]         ← bundle idx
+
+            teacher A (W=3):
+                [A A A .]               [. . . .]          expected span 1, observed 1  ✓
+            teacher B (W=4):
+                [. . . B]               [B B B .]          expected span 1, observed 2  ✗
+
+        Teacher B's one replica (W=4) is expected to stay on a single node,
+        but the linear split dropped it on bundles 3-6 — straddling nodes 0
+        and 1. This check rejects that sub-pool instead of letting vLLM's
+        launch loop silently produce an inconsistent per-node worker layout.
+        """
+        key = self.teacher_model_config.key
+        P = gpus_per_node
+        W = per_replica_world_size
+        expected_span = (W + P - 1) // P
+        for i, sub_pool in enumerate(replica_pools):
+            start = sub_pool.start_bundle_index
+            first_node = start // P
+            last_node = (start + W - 1) // P
+            observed_span = last_node - first_node + 1
+            if observed_span != expected_span:
+                raise ValueError(
+                    f"Teacher {key!r} replica {i} sub-pool bundles [{start}, {start + W}) "
+                    f"span {observed_span} node(s) but world_size {W} with n_gpus_per_node "
+                    f"{P} expects {expected_span}. Reorder teachers or adjust world_sizes "
+                    f"so each replica sub-pool aligns to node boundaries."
+                )
 
     def _initialize_load_balancer_handle(self):
         from verl.experimental.agent_loop.agent_loop import GlobalRequestLoadBalancer
