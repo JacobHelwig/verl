@@ -80,26 +80,32 @@ class AsyncTeacherLLMServerManager:
         self.distillation_loss_config: DistillationLossConfig = self.distillation_config.distillation_loss
         self.teacher_key: str = self.distillation_config.teacher_key
 
-        teacher_models = self.distillation_config.teacher_models
-        if set(servers_by_key.keys()) != set(teacher_models.keys()):
+        # Re-key the teacher configs by each teacher's routing key (.key), which is what samples
+        # index into via `teacher_key`. `distillation_config.teacher_models` is keyed by the YAML
+        # dict name (e.g., "gsm8k") rather than the routing value (e.g., "openai/gsm8k").
+        teacher_model_configs_by_key: dict[str, DistillationTeacherModelConfig] = {
+            teacher.key: teacher for teacher in self.distillation_config.teacher_models.values()
+        }
+        expected = set(teacher_model_configs_by_key)
+        if set(servers_by_key.keys()) != expected:
             raise ValueError(
-                f"servers_by_key keys {sorted(servers_by_key)} do not match teacher_models keys "
-                f"{sorted(teacher_models)}."
+                f"servers_by_key keys {sorted(servers_by_key)} do not match teacher routing keys "
+                f"{sorted(expected)}."
             )
-        if set(load_balancer_handle_by_key.keys()) != set(teacher_models.keys()):
+        if set(load_balancer_handle_by_key.keys()) != expected:
             raise ValueError(
                 f"load_balancer_handle_by_key keys {sorted(load_balancer_handle_by_key)} do not match "
-                f"teacher_models keys {sorted(teacher_models)}."
+                f"teacher routing keys {sorted(expected)}."
             )
 
-        self.teacher_model_configs: dict[str, DistillationTeacherModelConfig] = teacher_models
+        self.teacher_model_configs: dict[str, DistillationTeacherModelConfig] = teacher_model_configs_by_key
         self.server_managers: dict[str, AsyncLLMServerManager] = {
             key: AsyncLLMServerManager(
                 config=config,
                 servers=servers_by_key[key],
                 load_balancer_handle=load_balancer_handle_by_key[key],
             )
-            for key in teacher_models
+            for key in teacher_model_configs_by_key
         }
 
     def _resolve_teacher_key(self, routing_key: Optional[str]) -> str:
