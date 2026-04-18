@@ -196,13 +196,12 @@ class MultiTeacherModelManager:
         split_sizes = [teacher.world_size for teacher in teacher_models.values()]
         split_pools = split_resource_pool(self.resource_pool, split_size=split_sizes)
 
-        for (_, teacher_model_config), teacher_pool in zip(teacher_models.items(), split_pools, strict=True):
+        for (key, teacher_model_config), teacher_pool in zip(teacher_models.items(), split_pools, strict=True):
             manager = TeacherModelManager(
                 distillation_config=self.distillation_config,
                 teacher_model_config=teacher_model_config,
                 resource_pool=teacher_pool,
             )
-            key = teacher_model_config.key
             self.teacher_model_managers[key] = manager
             self.server_addresses[key] = manager.server_addresses
             self.server_handles[key] = manager.server_handles
