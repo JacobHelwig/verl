@@ -38,9 +38,8 @@ class TeacherModelManager:
 
     Splits `resource_pool` into per-replica chunks sized by
     `teacher_model_config.inference` parallelism, launches a colocated inference replica
-    on each chunk, and exposes the resulting server handles and addresses, a
-    `GlobalRequestLoadBalancer`, and a router address for use by
-    `AsyncTeacherLLMServerManager`.
+    on each chunk, and exposes the resulting server handles and addresses plus a
+    `GlobalRequestLoadBalancer` for use by `AsyncTeacherLLMServerManager`.
     """
 
     def __init__(
@@ -67,7 +66,6 @@ class TeacherModelManager:
         self.resource_pool = resource_pool
         self._initialize_llm_servers()
         self._initialize_load_balancer_handle()
-        self._initialize_router()
 
     def _initialize_llm_servers(self):
         teacher_model_config = self.teacher_model_config
@@ -114,16 +112,6 @@ class TeacherModelManager:
         self.load_balancer_handle = GlobalRequestLoadBalancer.remote(
             server_actor_ids=self.server_addresses,
         )
-
-    def _initialize_router(self):
-        worker_urls = [f"http://{server_address}" for server_address in self.server_addresses]
-
-        from ..reward_loop.router.naive_router import launch_router_process
-
-        self.router_address, _ = launch_router_process(worker_urls=worker_urls)
-
-    def get_router_address(self):
-        return self.router_address
 
     @auto_await
     async def wake_up(self):
@@ -174,10 +162,6 @@ class MultiTeacherModelManager:
     def _initialize_load_balancer_handle(self):
         """TODO: MOPD -- balancers become a dict (one per teacher)"""
         self.load_balancer_handle = self.teacher_model_manager.load_balancer_handle
-
-    def get_router_address(self):
-        """TODO: MOPD -- return dict of router addresses (one per teacher)"""
-        return self.teacher_model_manager.router_address
 
     @auto_await
     async def wake_up(self):
