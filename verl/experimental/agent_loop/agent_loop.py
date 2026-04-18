@@ -887,7 +887,13 @@ class AgentLoopWorker:
                 output.extra_fields["reward_extra_info"] = result["reward_extra_info"]
             output.metrics.compute_score = timing["compute_score"]
 
-    async def _compute_teacher_logprobs(self, output: AgentLoopOutput, prompt_ids, response_ids, validate):
+    async def _compute_teacher_logprobs(
+        self,
+        output: AgentLoopOutput,
+        prompt_ids: list[int],
+        response_ids: list[int],
+        validate: bool,
+    ) -> None:
         """Compute teacher logprobs for single sample."""
         if self.distillation_enabled and not validate:
             teacher_ids, teacher_logprobs = await self.teacher_server_manager.compute_teacher_logprobs_single(
