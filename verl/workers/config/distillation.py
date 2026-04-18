@@ -234,13 +234,6 @@ class DistillationConfig(BaseConfig):
                 f"resource pool size ({self.n_gpus_per_node=} * {self.nnodes=} = {total_pool_size})."
             )
 
-    def get_single_teacher_model(self) -> DistillationTeacherModelConfig:
-        if len(self.teacher_models) != 1:
-            raise ValueError(
-                f"Expected exactly one active distillation teacher config, but got {len(self.teacher_models)}."
-            )
-        return next(iter(self.teacher_models.values()))
-
     def _resolve_teacher_models(self) -> dict[str, DistillationTeacherModelConfig]:
         assert "teacher_model" in self.teacher_models
         if len(self.teacher_models) == 1:
