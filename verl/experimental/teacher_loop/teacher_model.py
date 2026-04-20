@@ -149,16 +149,6 @@ class TeacherModelManager:
             server_actor_ids=self.server_addresses,
         )
 
-    @auto_await
-    async def wake_up(self):
-        """Wake up all rollout replica instances."""
-        await _run_all([replica.wake_up() for replica in self.rollout_replicas])
-
-    @auto_await
-    async def sleep(self):
-        """Sleep all rollout replica instances."""
-        await _run_all([replica.sleep() for replica in self.rollout_replicas])
-
 
 class MultiTeacherModelManager:
     """Manages one inner `TeacherModelManager` per teacher model, keyed by each teacher's `key`."""
@@ -201,13 +191,3 @@ class MultiTeacherModelManager:
             self.server_addresses[key] = manager.server_addresses
             self.server_handles[key] = manager.server_handles
             self.load_balancer_handle[key] = manager.load_balancer_handle
-
-    @auto_await
-    async def wake_up(self):
-        """Wake up every teacher's rollout replicas."""
-        await _run_all([manager.wake_up() for manager in self.teacher_model_managers.values()])
-
-    @auto_await
-    async def sleep(self):
-        """Sleep every teacher's rollout replicas."""
-        await _run_all([manager.sleep() for manager in self.teacher_model_managers.values()])

@@ -465,8 +465,6 @@ class AgentLoopManagerTQ(AgentLoopManager):
         await instance._initialize_llm_servers()
         await instance._init_global_load_balancer()
         await instance._init_agent_loop_workers()
-        if teacher_model_manager is not None:
-            await instance.teacher_model_manager.wake_up()
         return instance
 
     def generate_sequences(self, prompts: TensorDict) -> None:
