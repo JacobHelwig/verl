@@ -122,27 +122,40 @@ class DistillationTeacherModelConfig(BaseConfig):
         Model path for the teacher model. Can be a local path or a Hugging Face model
     inference (RolloutConfig):
         Rollout configuration for the teacher model inference during distillation.
-    world_size (int):
-        Total number of GPUs allocated to this teacher (sum across nodes). The teacher's
-        own data/tensor/pipeline parallel sizes (inference.data_parallel_size,
-        inference.tensor_model_parallel_size, inference.pipeline_model_parallel_size)
-        determine how many replicas fit: num_replicas = world_size / (DP * TP * PP).
+    num_replicas (int):
+        Number of inference replicas of this teacher to launch. Each replica occupies
+        `per_replica_world_size` GPUs (= inference.data_parallel_size *
+        inference.tensor_model_parallel_size * inference.pipeline_model_parallel_size),
+        so the teacher's total GPU footprint is
+        `num_replicas * per_replica_world_size`.
     """
 
-    _mutable_fields = BaseConfig._mutable_fields | {"world_size", "key"}
+    _mutable_fields = BaseConfig._mutable_fields | {"num_replicas", "key"}
 
     key: Optional[str] = None
     model_path: Optional[str] = None
     inference: RolloutConfig = field(default_factory=RolloutConfig)
-    world_size: Optional[int] = 0
+    num_replicas: Optional[int] = 0
+
+    @property
+    def per_replica_world_size(self) -> int:
+        return (
+            self.inference.tensor_model_parallel_size
+            * self.inference.data_parallel_size
+            * self.inference.pipeline_model_parallel_size
+        )
+
+    @property
+    def world_size(self) -> int:
+        return self.num_replicas * self.per_replica_world_size
 
     def check_configured(self):
         if self.model_path is None:
             raise ValueError("model_path must be specified for distillation teacher model config.")
         if self.key is None:
             raise ValueError("key must be specified for distillation teacher model config.")
-        if self.world_size is None:
-            raise ValueError("world_size must be specified for distillation teacher model config.")
+        if self.num_replicas is None:
+            raise ValueError("num_replicas must be specified for distillation teacher model config.")
 
     def validate_and_prepare_for_distillation(self, use_topk: bool, topk: Optional[int]) -> None:
         # Prompt + Response from student are fed into teacher as context
@@ -204,6 +217,26 @@ class DistillationConfig(BaseConfig):
         the data proto, e.g., data_source.
     distillation_loss (DistillationLossConfig):
     Configuration for distillation loss settings.
+
+    NOTE: The `teacher_model` entry is in the `teacher_models` dict by default.
+    Since it is popped when other teacher entries are added, using `teacher_model` as
+    one of several keys silently drops it. For example, the following CLI overrides result
+    in ONLY `teacher_model2` being used:
+
+    ```bash
+    distillation.teacher_models.teacher_model.key=openai/gsm8k
+    distillation.teacher_models.teacher_model.model_path=Qwen/Qwen3-4B
+    +distillation.teacher_models.teacher_model2.key=hiyouga/geometry3k
+    +distillation.teacher_models.teacher_model2.model_path=Qwen/Qwen3-VL-4B-Instruct
+    ```
+    Instead, give the first teacher a different name:
+
+    ```bash
+    +distillation.teacher_models.teacher_model1.key=openai/gsm8k
+    +distillation.teacher_models.teacher_model1.model_path=Qwen/Qwen3-4B
+    +distillation.teacher_models.teacher_model2.key=hiyouga/geometry3k
+    +distillation.teacher_models.teacher_model2.model_path=Qwen/Qwen3-VL-4B-Instruct
+    ```
     """
 
     _mutable_fields = BaseConfig._mutable_fields | {"teacher_models", "n_gpus_per_node", "nnodes"}
@@ -230,8 +263,9 @@ class DistillationConfig(BaseConfig):
         total_pool_size = self.n_gpus_per_node * self.nnodes
         if teacher_world_size_sum != total_pool_size:
             raise ValueError(
-                f"Sum of teacher world_size ({teacher_world_size_sum}) must match the distillation "
-                f"resource pool size ({self.n_gpus_per_node=} * {self.nnodes=} = {total_pool_size})."
+                f"Sum of teacher (num_replicas * per_replica_world_size) ({teacher_world_size_sum}) must match "
+                f"the distillation resource pool size "
+                f"({self.n_gpus_per_node=} * {self.nnodes=} = {total_pool_size})."
             )
 
     def _resolve_teacher_models(self) -> dict[str, DistillationTeacherModelConfig]:
@@ -239,7 +273,19 @@ class DistillationConfig(BaseConfig):
         if len(self.teacher_models) == 1:
             # Single teacher occupies the entire teacher resource pool.
             teacher_model = self.teacher_models["teacher_model"]
-            teacher_model.world_size = self.n_gpus_per_node * self.nnodes
+            inference = teacher_model.inference
+            per_replica = (
+                inference.tensor_model_parallel_size
+                * inference.data_parallel_size
+                * inference.pipeline_model_parallel_size
+            )
+            pool_size = self.n_gpus_per_node * self.nnodes
+            if pool_size % per_replica != 0:
+                raise ValueError(
+                    f"Single teacher's per_replica_world_size ({per_replica}) must divide the distillation "
+                    f"resource pool size ({self.n_gpus_per_node=} * {self.nnodes=} = {pool_size})."
+                )
+            teacher_model.num_replicas = pool_size // per_replica
             teacher_model.key = "default"
         else:
             # Multiple teachers: remove default single teacher config

@@ -60,17 +60,16 @@ class TeacherModelManager:
 
     def _initialize_llm_servers(self):
         teacher_model_config = self.teacher_model_config
-        teacher_world_size = (
-            teacher_model_config.inference.tensor_model_parallel_size
-            * teacher_model_config.inference.data_parallel_size
-            * teacher_model_config.inference.pipeline_model_parallel_size
-        )
-        world_size = self.resource_pool.world_size
-        if world_size % teacher_world_size != 0:
+        per_replica_world_size = teacher_model_config.per_replica_world_size
+        num_replicas = teacher_model_config.num_replicas
+        expected_pool_size = num_replicas * per_replica_world_size
+        if self.resource_pool.world_size != expected_pool_size:
             raise ValueError(
-                f"Teacher world size {teacher_world_size} must divide allocated resource pool size {world_size}."
+                f"Teacher {teacher_model_config.key!r} expected sub-pool of size "
+                f"{expected_pool_size} (num_replicas={num_replicas} * "
+                f"per_replica_world_size={per_replica_world_size}), but got "
+                f"{self.resource_pool.world_size}."
             )
-        num_replicas = world_size // teacher_world_size
 
         gpus_per_node = self.distillation_config.n_gpus_per_node
         rollout_replica_class = get_rollout_replica_class(teacher_model_config.inference.name)
@@ -88,9 +87,9 @@ class TeacherModelManager:
             )
             for replica_rank in range(num_replicas)
         ]
-        split_resource_pools = split_resource_pool(self.resource_pool, split_size=teacher_world_size)
+        split_resource_pools = split_resource_pool(self.resource_pool, split_size=per_replica_world_size)
         assert len(split_resource_pools) == len(self.rollout_replicas)
-        self._validate_replica_node_alignment(split_resource_pools, teacher_world_size, gpus_per_node)
+        self._validate_replica_node_alignment(split_resource_pools, per_replica_world_size, gpus_per_node)
         _run_all(
             [
                 server.init_colocated(resource_pool)
@@ -106,8 +105,7 @@ class TeacherModelManager:
         `per_replica_world_size` (W below) is the GPU count of a *single* inference
         replica — the product of the replica's inference-time parallelism
         (tensor_model_parallel_size * data_parallel_size * pipeline_model_parallel_size).
-        It is not the teacher's total GPU budget (`teacher.world_size`), which sums
-        across replicas.
+        It is not the teacher's total GPU footprint (`num_replicas * W`).
 
         `split_resource_pool` walks bundles linearly and is oblivious to node
         boundaries, so a replica's sub-pool can end up touching more nodes than W
@@ -138,9 +136,10 @@ class TeacherModelManager:
             if observed_span != expected_span:
                 raise ValueError(
                     f"Teacher {key!r} replica {i} sub-pool bundles [{start}, {start + W}) "
-                    f"span {observed_span} node(s) but world_size {W} with n_gpus_per_node "
-                    f"{P} expects {expected_span}. Reorder teachers or adjust world_sizes "
-                    f"so each replica sub-pool aligns to node boundaries."
+                    f"span {observed_span} node(s) but per_replica_world_size {W} with "
+                    f"n_gpus_per_node {P} expects {expected_span}. Reorder teachers or "
+                    f"adjust num_replicas / inference parallelism so each replica sub-pool "
+                    f"aligns to node boundaries."
                 )
 
     def _initialize_load_balancer_handle(self):
