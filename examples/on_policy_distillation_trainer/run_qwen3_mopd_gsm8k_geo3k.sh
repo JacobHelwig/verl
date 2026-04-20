@@ -30,10 +30,13 @@ USE_DYNAMIC_BSZ=False
 
 STUDENT_WORLD_SIZE=2
 
-# Total GPUs each teacher gets; the teacher pool's total size must equal the sum.
-TEACHER_WORLD_SIZE_GSM8K=1
-TEACHER_WORLD_SIZE_GEO3K=1
-TEACHER_POOL_WORLD_SIZE=$(( TEACHER_WORLD_SIZE_GSM8K + TEACHER_WORLD_SIZE_GEO3K ))
+# Number of replicas per teacher. Each replica occupies
+# (inference.tensor_model_parallel_size * inference.data_parallel_size *
+# inference.pipeline_model_parallel_size) GPUs — with TP=DP=PP=1 below, that's 1 GPU per
+# replica, so the teacher pool size must equal the sum of num_replicas.
+TEACHER_NUM_REPLICAS_GSM8K=1
+TEACHER_NUM_REPLICAS_GEO3K=1
+TEACHER_POOL_WORLD_SIZE=$(( TEACHER_NUM_REPLICAS_GSM8K + TEACHER_NUM_REPLICAS_GEO3K ))
 
 SP=1
 
@@ -82,7 +85,7 @@ DISTILLATION=(
     # --- gsm8k teacher ---
     +distillation.teacher_models.gsm8k.key="openai/gsm8k"
     +distillation.teacher_models.gsm8k.model_path="${FAMILY}/${GSM8K_TEACHER_MODEL}"
-    +distillation.teacher_models.gsm8k.world_size=$TEACHER_WORLD_SIZE_GSM8K
+    +distillation.teacher_models.gsm8k.num_replicas=$TEACHER_NUM_REPLICAS_GSM8K
     +distillation.teacher_models.gsm8k.inference.name=$ROLLOUT_NAME
     +distillation.teacher_models.gsm8k.inference.tensor_model_parallel_size=1
     +distillation.teacher_models.gsm8k.inference.gpu_memory_utilization=0.8
@@ -93,7 +96,7 @@ DISTILLATION=(
     # --- geo3k teacher (VL) ---
     +distillation.teacher_models.geo3k.key="hiyouga/geometry3k"
     +distillation.teacher_models.geo3k.model_path="${FAMILY}/${GEO3K_TEACHER_MODEL}"
-    +distillation.teacher_models.geo3k.world_size=$TEACHER_WORLD_SIZE_GEO3K
+    +distillation.teacher_models.geo3k.num_replicas=$TEACHER_NUM_REPLICAS_GEO3K
     +distillation.teacher_models.geo3k.inference.name=$ROLLOUT_NAME
     +distillation.teacher_models.geo3k.inference.tensor_model_parallel_size=1
     +distillation.teacher_models.geo3k.inference.gpu_memory_utilization=0.8
