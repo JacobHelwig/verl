@@ -30,13 +30,10 @@ USE_DYNAMIC_BSZ=False
 
 STUDENT_WORLD_SIZE=2
 
-# Number of replicas per teacher. Each replica occupies
-# (inference.tensor_model_parallel_size * inference.data_parallel_size *
-# inference.pipeline_model_parallel_size) GPUs — with TP=DP=PP=1 below, that's 1 GPU per
-# replica, so the teacher pool size must equal the sum of num_replicas.
+# Number of replicas per teacher.
 TEACHER_NUM_REPLICAS_GSM8K=1
 TEACHER_NUM_REPLICAS_GEO3K=1
-TEACHER_POOL_WORLD_SIZE=$(( TEACHER_NUM_REPLICAS_GSM8K + TEACHER_NUM_REPLICAS_GEO3K ))
+TEACHER_POOL_WORLD_SIZE=$(( TEACHER_NUM_REPLICAS_GSM8K + TEACHER_NUM_REPLICAS_GEO3K )) # Assumes TP=DP=PP=1
 
 SP=1
 
