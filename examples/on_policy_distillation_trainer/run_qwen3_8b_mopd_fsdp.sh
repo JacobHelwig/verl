@@ -1,64 +1,65 @@
 #!/usr/bin/env bash
+# On-policy distillation | multi-teacher (gsm8k text + geo3k VL) | vLLM rollout | FSDP training | NVIDIA GPUs
+
 set -xeuo pipefail
 
-############################ Quick Config ############################
+# ---- user-adjustable ----
+STUDENT_MODEL=${STUDENT_MODEL:-Qwen/Qwen3-VL-8B-Instruct}
+GSM8K_TEACHER_MODEL=${GSM8K_TEACHER_MODEL:-Qwen/Qwen3-32B}
+GEO3K_TEACHER_MODEL=${GEO3K_TEACHER_MODEL:-Qwen/Qwen3-VL-32B-Instruct}
 
-ROLLOUT_NAME="vllm" # sglang or vllm
+NNODES=${NNODES:-1}
+NGPUS_PER_NODE=${NGPUS_PER_NODE:-8}
 
-FAMILY="Qwen"
-STUDENT_MODEL=Qwen3-VL-2B-Instruct
-GSM8K_TEACHER_MODEL=Qwen3-4B-Instruct-2507
-GEO3K_TEACHER_MODEL=Qwen3-VL-4B-Instruct
+# Per-teacher replicas; total teacher GPUs = sum(num_replicas) * teacher_tp
+TEACHER_NUM_REPLICAS_GSM8K=${TEACHER_NUM_REPLICAS_GSM8K:-1}
+TEACHER_NUM_REPLICAS_GEO3K=${TEACHER_NUM_REPLICAS_GEO3K:-1}
+teacher_tp=${TEACHER_TP:-2}
+TEACHER_WORLD_SIZE=$(( (TEACHER_NUM_REPLICAS_GSM8K + TEACHER_NUM_REPLICAS_GEO3K) * teacher_tp ))
 
-USE_POLICY_GRADIENT=True
-DISTILLATION_LOSS_MODE="k1"
-USE_FUSED_KERNELS=False
+distillation_loss_mode=${DISTILLATION_LOSS_MODE:-k1}
+use_policy_gradient=${USE_POLICY_GRADIENT:-True}
+distillation_topk=${DISTILLATION_TOPK:-64}
 
-DISTILLATION_LOSS_MAX_CLAMP=10.0
-DISTILLATION_LOG_PROB_MIN_CLAMP=-10.0
+train_batch_size=${TRAIN_BATCH_SIZE:-128}
+ppo_mini_batch_size=${PPO_MINI_BATCH_SIZE:-128}
+max_prompt_length=${MAX_PROMPT_LENGTH:-1024}
+max_response_length=${MAX_RESPONSE_LENGTH:-2048}
+ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU:-24576}
 
-PROJECT_NAME='verl_on_policy_distillation_example_gsm8k_geo3k'
-EXP_NAME="${FAMILY}/student-${STUDENT_MODEL}/teacher-gsm8k-${GSM8K_TEACHER_MODEL}/teacher-geo3k-${GEO3K_TEACHER_MODEL}/loss-${DISTILLATION_LOSS_MODE}-pg-${USE_POLICY_GRADIENT}"
+actor_lr=${ACTOR_LR:-1e-6}
 
-MAX_PROMPT=1024
-MAX_RESPONSE_LENGTH=2048
-MAX_NUM_TOKENS=$(( MAX_PROMPT + MAX_RESPONSE_LENGTH + 1 ))
-TRAIN_PROMPT_BSZ=128
-STUDENT_MICRO_BATCH_SIZE_PER_GPU=1
-STUDENT_MAX_TOKEN_LEN_PER_GPU=$(( STUDENT_MICRO_BATCH_SIZE_PER_GPU * (MAX_PROMPT + MAX_RESPONSE_LENGTH) ))
-USE_DYNAMIC_BSZ=False
+rollout_tp=${ROLLOUT_TP:-2}
+rollout_gpu_mem_util=${ROLLOUT_GPU_MEM_UTIL:-0.4}
+teacher_gpu_mem_util=${TEACHER_GPU_MEM_UTIL:-0.4}
 
-STUDENT_WORLD_SIZE=2
+total_epochs=${TOTAL_EPOCHS:-15}
+save_freq=${SAVE_FREQ:-200}
+test_freq=${TEST_FREQ:-5}
 
-# Number of replicas per teacher.
-TEACHER_NUM_REPLICAS_GSM8K=1
-TEACHER_NUM_REPLICAS_GEO3K=1
+project_name=${PROJECT_NAME:-verl_distill_mopd_gsm8k_geo3k}
+experiment_name=${EXPERIMENT_NAME:-qwen3_vl_8b_from_qwen3_32b_and_qwen3_vl_32b_mopd_vllm_fsdp}
+# ---- end user-adjustable ----
 
-# Teacher world size; this example assumes TP=DP=PP=1
-TEACHER_POOL_WORLD_SIZE=$(( TEACHER_NUM_REPLICAS_GSM8K + TEACHER_NUM_REPLICAS_GEO3K ))
+gsm8k_train=$HOME/data/gsm8k/train.parquet
+gsm8k_test=$HOME/data/gsm8k/test.parquet
+geo3k_train=$HOME/data/geo3k/train.parquet
+geo3k_test=$HOME/data/geo3k/test.parquet
 
-SP=1
+train_files="['$gsm8k_train', '$geo3k_train']"
+val_files="['$gsm8k_test', '$geo3k_test']"
 
-ENFORCE_EAGER=False # true for faster debugging
-
-############################ Paths ############################
-
-gsm8k_train_path=$DATA_PATH/gsm8k/train.parquet
-gsm8k_test_path=$DATA_PATH/gsm8k/test.parquet
-geo3k_train_path=$DATA_PATH/geo3k/train.parquet
-geo3k_test_path=$DATA_PATH/geo3k/test.parquet
-
-TRAIN_FILES="['$gsm8k_train_path','$geo3k_train_path']"
-TEST_FILES="['$gsm8k_test_path','$geo3k_test_path']"
-
-############################ Parameter Groups ############################
+max_num_tokens=$(( max_prompt_length + max_response_length + 1 ))
+########################### parameter arrays ###########################
 
 DATA=(
-    data.train_files="$TRAIN_FILES"
-    data.val_files="$TEST_FILES"
-    data.max_prompt_length=$MAX_PROMPT
-    data.max_response_length=$MAX_RESPONSE_LENGTH
-    data.train_batch_size=$TRAIN_PROMPT_BSZ
+    algorithm.adv_estimator=grpo
+    algorithm.use_kl_in_reward=False
+    data.train_files="$train_files"
+    data.val_files="$val_files"
+    data.train_batch_size=${train_batch_size}
+    data.max_prompt_length=${max_prompt_length}
+    data.max_response_length=${max_response_length}
     data.filter_overlong_prompts=True
     data.truncation='error'
     data.shuffle=True
@@ -66,111 +67,83 @@ DATA=(
 )
 
 MODEL=(
-    actor_rollout_ref.model.path="${FAMILY}/${STUDENT_MODEL}"
-    actor_rollout_ref.model.enable_gradient_checkpointing=True
+    actor_rollout_ref.model.path="$STUDENT_MODEL"
     actor_rollout_ref.model.use_remove_padding=True
-    actor_rollout_ref.model.use_fused_kernels=$USE_FUSED_KERNELS
+    actor_rollout_ref.model.enable_gradient_checkpointing=True
+)
+
+ACTOR=(
     actor_rollout_ref.actor.use_torch_compile=True
-    actor_rollout_ref.rollout.enforce_eager=$ENFORCE_EAGER
-)
-
-# Multi-teacher: one teacher per dataset, routed by the sample's `data_source` value.
-# Each teacher has its own model_path and inference config.
-DISTILLATION=(
-    distillation.enabled=True
-    distillation.teacher_key=data_source
-    distillation.n_gpus_per_node=$TEACHER_POOL_WORLD_SIZE
-    distillation.nnodes=1
-    # --- gsm8k teacher ---
-    +distillation.teacher_models.gsm8k.key="openai/gsm8k"
-    +distillation.teacher_models.gsm8k.model_path="${FAMILY}/${GSM8K_TEACHER_MODEL}"
-    +distillation.teacher_models.gsm8k.num_replicas=$TEACHER_NUM_REPLICAS_GSM8K
-    +distillation.teacher_models.gsm8k.inference.name=$ROLLOUT_NAME
-    +distillation.teacher_models.gsm8k.inference.tensor_model_parallel_size=1
-    +distillation.teacher_models.gsm8k.inference.gpu_memory_utilization=0.8
-    +distillation.teacher_models.gsm8k.inference.enforce_eager=$ENFORCE_EAGER
-    +distillation.teacher_models.gsm8k.inference.max_model_len=$MAX_NUM_TOKENS
-    +distillation.teacher_models.gsm8k.inference.max_num_batched_tokens=$MAX_NUM_TOKENS
-    +distillation.teacher_models.gsm8k.inference.max_num_seqs=$MAX_NUM_TOKENS
-    # --- geo3k teacher (VL) ---
-    +distillation.teacher_models.geo3k.key="hiyouga/geometry3k"
-    +distillation.teacher_models.geo3k.model_path="${FAMILY}/${GEO3K_TEACHER_MODEL}"
-    +distillation.teacher_models.geo3k.num_replicas=$TEACHER_NUM_REPLICAS_GEO3K
-    +distillation.teacher_models.geo3k.inference.name=$ROLLOUT_NAME
-    +distillation.teacher_models.geo3k.inference.tensor_model_parallel_size=1
-    +distillation.teacher_models.geo3k.inference.gpu_memory_utilization=0.8
-    +distillation.teacher_models.geo3k.inference.enforce_eager=$ENFORCE_EAGER
-    +distillation.teacher_models.geo3k.inference.max_model_len=$MAX_NUM_TOKENS
-    +distillation.teacher_models.geo3k.inference.max_num_batched_tokens=$MAX_NUM_TOKENS
-    +distillation.teacher_models.geo3k.inference.max_num_seqs=$MAX_NUM_TOKENS
-    +distillation.teacher_models.geo3k.inference.engine_kwargs.vllm.mm_processor_cache_gb=0
-    # --- loss ---
-    distillation.distillation_loss.loss_mode=$DISTILLATION_LOSS_MODE
-    distillation.distillation_loss.topk=64
-    distillation.distillation_loss.use_task_rewards=False
-    distillation.distillation_loss.use_policy_gradient=$USE_POLICY_GRADIENT
-    distillation.distillation_loss.loss_max_clamp=$DISTILLATION_LOSS_MAX_CLAMP
-    distillation.distillation_loss.log_prob_min_clamp=$DISTILLATION_LOG_PROB_MIN_CLAMP
-)
-
-STUDENT=(
-    actor_rollout_ref.actor.optim.lr=1e-6
-    actor_rollout_ref.actor.ppo_mini_batch_size=$TRAIN_PROMPT_BSZ
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=$STUDENT_MICRO_BATCH_SIZE_PER_GPU
-    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$STUDENT_MAX_TOKEN_LEN_PER_GPU
-    actor_rollout_ref.actor.use_dynamic_bsz=$USE_DYNAMIC_BSZ
+    actor_rollout_ref.actor.optim.lr=${actor_lr}
+    actor_rollout_ref.actor.ppo_mini_batch_size=${ppo_mini_batch_size}
+    actor_rollout_ref.actor.use_dynamic_bsz=True
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu=${ppo_max_token_len_per_gpu}
     actor_rollout_ref.actor.fsdp_config.param_offload=True
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
-    actor_rollout_ref.actor.ulysses_sequence_parallel_size=$SP
 )
 
 ROLLOUT=(
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$STUDENT_MICRO_BATCH_SIZE_PER_GPU
-    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=$STUDENT_MAX_TOKEN_LEN_PER_GPU
-    actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=$USE_DYNAMIC_BSZ
-    actor_rollout_ref.rollout.tensor_model_parallel_size=1
-    actor_rollout_ref.rollout.name=$ROLLOUT_NAME
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8
-    actor_rollout_ref.rollout.calculate_log_probs=False
-    actor_rollout_ref.rollout.max_model_len=$MAX_NUM_TOKENS
-    actor_rollout_ref.rollout.max_num_batched_tokens=$MAX_NUM_TOKENS
-    actor_rollout_ref.rollout.max_num_seqs=$MAX_NUM_TOKENS
+    actor_rollout_ref.rollout.name=vllm
+    actor_rollout_ref.rollout.tensor_model_parallel_size=${rollout_tp}
+    actor_rollout_ref.rollout.gpu_memory_utilization=${rollout_gpu_mem_util}
     actor_rollout_ref.rollout.n=1
-    +actor_rollout_ref.rollout.engine_kwargs.vllm.mm_processor_cache_gb=0
-)
-
-ALGORITHM=(
-    algorithm.adv_estimator=grpo
-    algorithm.use_kl_in_reward=False
+    actor_rollout_ref.rollout.max_model_len=${max_num_tokens}
+    actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=True
+    actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=${ppo_max_token_len_per_gpu}
 )
 
 TRAINER=(
+    trainer.balance_batch=True
     trainer.logger='["console","wandb"]'
-    trainer.project_name=$PROJECT_NAME
-    trainer.experiment_name=$EXP_NAME
-    trainer.n_gpus_per_node=$STUDENT_WORLD_SIZE
-    trainer.nnodes=1
-    trainer.save_freq=200
-    trainer.test_freq=5
-    trainer.total_epochs=15
-    trainer.val_before_train=True
-    trainer.use_legacy_worker_impl=disable
-    trainer.resume_mode=disable
-    trainer.log_val_generations=5
+    trainer.project_name=${project_name}
+    trainer.experiment_name=${experiment_name}
+    trainer.n_gpus_per_node=${NGPUS_PER_NODE}
+    trainer.nnodes=${NNODES}
+    trainer.val_before_train=False
+    trainer.save_freq=${save_freq}
+    trainer.test_freq=${test_freq}
+    trainer.total_epochs=${total_epochs}
 )
 
+# Multi-teacher: one teacher per dataset, routed by the sample's `data_source` value.
+# Use `+distillation.teacher_models.<name>.*` to add named teachers; the default `teacher_model`
+# entry is silently popped when other teacher entries are added.
+EXTRA=(
+    distillation.enabled=True
+    distillation.n_gpus_per_node=${TEACHER_WORLD_SIZE}
+    distillation.nnodes=${NNODES}
+    distillation.teacher_key=data_source
+    # --- gsm8k teacher (text) ---
+    +distillation.teacher_models.gsm8k.key="openai/gsm8k"
+    +distillation.teacher_models.gsm8k.model_path="$GSM8K_TEACHER_MODEL"
+    +distillation.teacher_models.gsm8k.num_replicas=${TEACHER_NUM_REPLICAS_GSM8K}
+    +distillation.teacher_models.gsm8k.inference.name=vllm
+    +distillation.teacher_models.gsm8k.inference.tensor_model_parallel_size=${teacher_tp}
+    +distillation.teacher_models.gsm8k.inference.gpu_memory_utilization=${teacher_gpu_mem_util}
+    +distillation.teacher_models.gsm8k.inference.max_model_len=${max_num_tokens}
+    # --- geo3k teacher (VL) ---
+    +distillation.teacher_models.geo3k.key="hiyouga/geometry3k"
+    +distillation.teacher_models.geo3k.model_path="$GEO3K_TEACHER_MODEL"
+    +distillation.teacher_models.geo3k.num_replicas=${TEACHER_NUM_REPLICAS_GEO3K}
+    +distillation.teacher_models.geo3k.inference.name=vllm
+    +distillation.teacher_models.geo3k.inference.tensor_model_parallel_size=${teacher_tp}
+    +distillation.teacher_models.geo3k.inference.gpu_memory_utilization=${teacher_gpu_mem_util}
+    +distillation.teacher_models.geo3k.inference.max_model_len=${max_num_tokens}
+    # --- loss ---
+    distillation.distillation_loss.loss_mode=${distillation_loss_mode}
+    distillation.distillation_loss.topk=${distillation_topk}
+    distillation.distillation_loss.use_task_rewards=False
+    distillation.distillation_loss.use_policy_gradient=${use_policy_gradient}
+    distillation.distillation_loss.loss_max_clamp=10.0
+    distillation.distillation_loss.log_prob_min_clamp=-10.0
+)
 
-
-############################ Launch ############################
-
+########################### launch ###########################
 python3 -m verl.trainer.main_ppo \
-    --config-path=config \
-    --config-name='ppo_trainer.yaml' \
     "${DATA[@]}" \
-    "${ALGORITHM[@]}" \
     "${MODEL[@]}" \
-    "${DISTILLATION[@]}" \
+    "${ACTOR[@]}" \
     "${ROLLOUT[@]}" \
-    "${STUDENT[@]}" \
     "${TRAINER[@]}" \
+    "${EXTRA[@]}" \
     "$@"
