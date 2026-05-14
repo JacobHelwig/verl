@@ -316,26 +316,35 @@ We have example scripts in the directory `examples/on_policy_distillation_traine
 This shows the minimal setup for single teacher OPD. Enable distillation and specify resources for the teacher servers:
 
 ```yaml
-distillation.enabled=True
-distillation.n_gpus_per_node=2
-distillation.nnodes=1
+distillation:
+   enabled: true
+   n_gpus_per_node: 2
+   nnodes: 1
 ```
 
 Specify the teacher model name and server settings. 
 
 **NOTE**: the teacher model must have the same vocab as the student model, e.g., Qwen3-8B student and Qwen3-32B teacher. This is usually true if models are in the same family as each other. It can be verified by comparing tokenizers. Note that the model heads might have slightly different output dimensions due to padding, although this is not an issue. 
 
-```bash
-distillation.teacher_models.teacher_model.model_path=Qwen/Qwen3-32B
-distillation.teacher_models.teacher_model.inference.name=vllm
-distillation.teacher_models.teacher_model.inference.gpu_memory_utilization=0.8
+```yaml
+distillation:
+   teacher_models:
+      teacher_model:
+         model_path: Qwen/Qwen3-32B
+         inference:
+            name: vllm
+            gpu_memory_utilization: 0.8
 ```
 
 Note that the reference policy in GRPO/PPO applies a reverse KL distillation loss to the student policy to distill it from the reference policy. In most cases, this should be disabled by ensuring that
 
-```bash
-actor_rollout_ref.actor.use_kl_loss=False
-algorithm.use_kl_in_reward=False
+```yaml
+actor_rollout_ref:
+   actor:
+      use_kl_loss: false
+algorithm: 
+   use_kl_in_reward: 
+      False
 ```
 
 ### GKD OPD
@@ -344,10 +353,12 @@ As of May 14, 2026, the implementation only supports computing of the GKD OPD lo
 
 To use GKD OPD, set the loss mode, the top-\(k\) value, and disable policy gradient. 
 
-```bash
-distillation.distillation_loss.loss_mode=forward_kl_topk
-distillation.distillation_loss.topk=128
-distillation.distillation_loss.use_policy_gradient=False
+```yaml
+distillation:
+   distillation_loss: 
+      loss_mode: forward_kl_topk
+      topk: 128
+      use_policy_gradient: false
 ```
 
 **Note**: It is also important to not use policy gradient, since policy gradient only directly influences increases/decreases the logprob of the sampled token to match the teacher logprob, whereas the top-\(k\) loss includes signal for at least \(k-1\) other tokens. Using policy gradient is therefore not only computationally wasteful, but also adds noise to the reward. For example, consider the case where the student has perfectly matched the logprob of the sampled token relative to the teacher, but for all other tokens in the top-\(k\), it has overestimated. The forward KL is therefore positive, so policy gradient will decrease the logprob of the sampled token, despite already matching.
