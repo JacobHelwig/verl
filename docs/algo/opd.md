@@ -16,6 +16,75 @@ Last updated: 05/14/2026.
 
 ## Background
 
+### Summary
+
+1. OPD is useful for distilling knowledge from teacher model(s) to a student model while aligning training states with inference states.
+2. It is better than SFT/ vanilla KD because it is on-policy.
+3. It is better than RLVR because it gives token-level, continuous rewards.
+
+### Knowledge Distillation
+
+KD is useful for distilling knowledge from a teacher model to a student model. Consider the task of solving math problems. Conventional KD will first sample reasoning traces + solution given math prompts from the teacher model, and then train the student model using a next-token prediction objectives to match the teacher logprobs.
+
+Although effective, this introduces exposure bias: during training, the student will only learn how to act when it is in states sampled from the teacher. However, at inference time, states will be sampled from the student. Unless the student and teacher are perfectly aligned, the student will not have acquired knowledge from the teacher about how to act in its own state. In the example of math problems, perhaps the student distribution prefer algebraic proofs, but the teacher distribution prefers geometric proofs. While training distills knowledge primarily focused on the geometric proof, the student after training might still prefer algebraic proofs, thereby limiting the amount of knowledge acquired from the teacher that will be useful during rollouts.
+
+### On-Policy RL
+
+RLVR presents an alternative path: the student samples rollouts from its own rollout distribution, and if the rollout resulted in a correct solution, the logprobs of the overall solution are increased. This is good because now the training and inference distributions are aligned, however, the reward is binary and outcome based. That is, there is only 1 bit of information introduced into the system following a rollout, and it is at the rollout level, rather than more fine-grained and informative feedback at the token level.
+
+### OPD
+
+OPD [1,2,3] sits at the intersection of these two approaches. The student samples rollouts from its own distribution. Given the student rollout, the teacher returns logprobs of the next action in each of the student states. The student logprobs are then updated to match the teacher logprobs. In this way, the training and inference distribution are aligned, while the training signal is continuous and at the token level. Intuitively, this forces the teacher to provide knowledge to the student about how the teacher would act if it were in the student state. The teacher must provide the knowledge that it has given that the student has chosen to take the algebraic proof route.
+
+More formally, OPD aims to minimize the following objective:
+
+$$
+E_{x\sim p_data, y \sim student distribution} \frac1{|y|}\sum_t^{|y|}D(\pi_{student}(\cdot|y_{<t}, x), \pi_{teacher}(\cdot|y_{<t}, x), y_t),
+$$
+
+where p_data is a distribution over prompts, \pi_student is the student model, \pi_teacher is the teacher model, and D is some divergence of estimator of divergence.
+
+### Choice of divergence
+
+[1] and [3] use two different types of divergence and optimization procedures, both of which we have implemented. [1], whose method we refer to as "GKD OPD" computes the full-vocab KL between the two distributions. Using forward KL, this is:
+
+$$
+D(\pi(\cdot), \nu(\cdot), y_t) = \sum_i^{|V|} \nu(y_i) \log\left(\frac\nu(y_i)\pi(y_i)\right).
+$$
+
+GKD then minimizes the distillation loss by directly backpropagating this divergence. 
+
+*Note*: the current implementation (as of 5/14/26) only supports computing this over the top-k teacher logits. Thus, we only implement forward KL. In earlier implementations, we attempted to implement reverse KL using the student top-k, but found it to be unstable for 0.5B Qwen2.5. 
+
+[3], whose method we refer to as "PG OPD" uses a negative reverse KL estimate as a reward for the model to maximize. In the original implementation of PG OPD, the k1 estimator of the reverse KL was used as
+
+$$
+D(\pi(\cdot), \nu(\cdot), y_t) = \text{sg}(\log\pi(y_t)-\log\nu(y_t)\right).
+$$
+
+Note that this Monte-Carlo estimator is only valid for reverse KL due to tokens being sampled from the student distribution. In order to get an estimator for forward KL, tokens would have to be sampled from the teacher. Additionally, the stop gradient is necessary because otherwise, when differentiating wrt \pi params, \nu will dissappear. 
+
+
+### Multi-teacher OPD
+
+MOPD is an exciting approach which has been adopted by several recent models as an alternative to RL. Most recently, several labs have used OPD with multiple domains [4,5,6,7]. The base model was RLed independently on diverse domains, such as math, coding, and instruction following. This produces an expert model for each domain. These experts were then used to OPD the student model on each of the domains together: given a mixture of math, coding, and IF data, the student is trained to match the logprobs of the respective teacher.
+
+
+### Bibliography
+
+[1] Agarwal, Rishabh, et al. "On-policy distillation of language models: Learning from self-generated mistakes." International Conference on Learning Representations. Vol. 2024. 2024.
+
+[2] Yang, An, et al. "Qwen3 technical report." arXiv preprint arXiv:2505.09388 (2025).
+
+[3] Lu, Kevin and Thinking Machines Lab, "On-Policy Distillation", Thinking Machines Lab: Connectionism, Oct 2025.
+
+[4] Xiao, Bangjun, et al. "Mimo-v2-flash technical report." arXiv preprint arXiv:2601
+
+[5] Zeng, Aohan, et al. "Glm-5: from vibe coding to agentic engineering." arXiv preprint arXiv:2602.15763 (2026).
+
+[6] Yang, Zhuolin, et al. "Nemotron-Cascade 2: Post-Training LLMs with Cascade RL and Multi-Domain On-Policy Distillation." arXiv preprint arXiv:2603.19220 (2026).
+
+[7] DeepSeek-AI. "DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence." (2026) 
 
 ## Architecture
 
