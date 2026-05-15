@@ -4,20 +4,6 @@
 
 Last updated: 05/14/2026.
 
----
-
-> **Contents**
->
-> - **Background** - Introduction to On-Policy Distillation
-> - **Configuration Parameters** - Reference for the `distillation.*` config tree
-> - **Usage** - Recipes for single-teacher, multi-teacher, GKD, PG, and task-reward OPD
-> - **Metrics** - Logged metrics and how to interpret them
-> - **Debugging** - Sanity-check tips
-> - **Architecture** - Implementation and control flow of OPD
-> - **Files** - Where each piece of OPD lives in the repo
-
----
-
 ## Background
 
 ### Summary
@@ -692,48 +678,32 @@ Using the `DataProto` produced by the Agent Loop (rollouts + teacher logprobs in
    distillation is enabled, `self.loss_fn` is bound to `distillation_ppo_loss`
    at worker init; otherwise it is the standard `ppo_loss`.
 
-2. **Forward pass and (optional) inline top-k loss.**
-   `FSDPEngineWithLMHead.forward_step` runs the model forward, then calls
-   `prepare_model_outputs(..., logits_processor_func=loss_function)`. If the
-   active loss mode requires top-k (`distillation_use_topk=True`),
-   `prepare_model_outputs` invokes `distillation_ppo_loss` **as a logits
-   processor** while the full logits tensor is still in memory; this is the
-   `student_logits is not None` branch, which dispatches to a backend-specific
-   `compute_forward_kl_topk` (FSDP / Megatron). Per-token `distillation_losses`,
-   `student_mass`, and `teacher_mass` tensors are written back into
-   `model_output` so the full logits can be freed before the final loss step.
+2. **Forward pass and (optional) inline top-k loss.** The training engine's
+   forward step runs the model forward and, for top-$k$ loss modes
+   (`distillation_use_topk=True`), invokes `distillation_ppo_loss` **as a
+   logits processor** while the full logits tensor is still in memory; this is
+   the `student_logits is not None` branch of `distillation_ppo_loss`. The
+   logits-processor branch dispatches to `compute_forward_kl_topk`, which has a
+   separate implementation per training engine (FSDP and Megatron). Per-token
+   `distillation_losses`, `student_mass`, and `teacher_mass` tensors are
+   written back into `model_output` so the full logits can be freed before the
+   final loss step.
 
-3. **Final loss.** `forward_step` then calls `loss_function(model_output,
-   data, dp_group)`; this is the `student_logits is None` branch of
-   `distillation_ppo_loss`, where:
+3. **Final loss.** After the forward, the engine calls the loss function with
+   `model_output` (full logits already freed); this is the
+   `student_logits is None` branch of `distillation_ppo_loss`, where:
 
    1. **Per-token distillation loss** is produced by `distillation_loss(...)`,
-      which dispatches via `get_distillation_loss_fn(loss_mode)` to one of
-      two registered families:
-
-      - **Top-k** (`forward_kl_topk`, `use_topk=True`): reads the pre-computed
-        per-token tensors from `model_output` (populated by the logits
-        processor in step 2) and logs `student_mass` / `teacher_mass`
-        diagnostics. Negative divergences (a top-k truncation artifact) are
-        clamped to 0.
-      - **Single-sample KL estimators** (`kl`, `k1`, `abs`, `mse`, `k2`,
-        `low_var_kl`, `k3`, `use_estimator=True`): compares the student's
-        per-token `log_probs` (from the forward pass) directly against the
-        teacher's single log-prob in `data["teacher_logprobs"]` via
-        `kl_penalty`. No logits-processor pass is needed.
+      which dispatches via `get_distillation_loss_fn(loss_mode)` to one of the registered distillation losses.
 
    2. **Optional clamp.** If `loss_max_clamp` is set, per-token losses are
       clamped to `[-clamp, +clamp]` (k1 in particular can be negative).
 
    3. **Aggregation mode** — controlled by `use_policy_gradient`:
 
-      - `False` (supervised): aggregate per-token losses via `agg_loss` over
-        the response mask — straight backprop, as in
-        [arxiv 2306.13649](https://arxiv.org/abs/2306.13649).
-      - `True` (on-policy distillation): treat `-distillation_losses` as
-        advantages and run PPO-style clipped importance sampling against
-        `data["old_log_probs"]`, as in
-        [Thinking Machines' on-policy distillation post](https://thinkingmachines.ai/blog/on-policy-distillation/).
+      - `False` (GKD OPD): straight backprop on `distillation_losses`.
+      - `True` (PG OPD): treat `-distillation_losses` as
+        advantages and run PPO-style clipped importance sampling.
 
    4. **Combine with task rewards.** A standard PPO policy loss is computed
       from the rollout's task rewards via `ppo_loss(...)`. If
@@ -752,7 +722,7 @@ The returned scalar loss is what `engine.train_batch` backpropagates.
 - `verl/trainer/distillation/fsdp/losses.py` — FSDP backend `compute_forward_kl_topk`
 - `verl/trainer/distillation/megatron/losses.py` — Megatron backend `compute_forward_kl_topk`
 - `verl/workers/engine_workers.py` — `ActorRolloutRefWorker.init_model`; binds `distillation_ppo_loss` as the actor's `loss_fn` when distillation is enabled
-- `verl/workers/engine/fsdp/transformer_impl.py` — `forward_step` / `prepare_model_outputs`; invokes `distillation_ppo_loss` first as a logits processor (top-k modes) and again as the final loss
+- `verl/workers/engine/{fsdp,megatron}/transformer_impl.py` — training-engine forward steps; invoke `distillation_ppo_loss` first as a logits processor (top-k modes) and again as the final loss
 - `verl/trainer/main_ppo.py` — `is_distillation_enabled` gate; allocates the dedicated `teacher_pool` resource pool
 - `verl/trainer/ppo/ray_trainer.py` — constructs `MultiTeacherModelManager` and hands its `get_client()` dict to `AgentLoopWorker(... teacher_client=…)`
 - `verl/workers/rollout/llm_server.py` — `LLMServerClient` and `GlobalRequestLoadBalancer` (sticky-session + least-loaded) used for both student rollout and teacher scoring

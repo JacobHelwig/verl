@@ -202,7 +202,6 @@ def distillation_ppo_loss(
 
     # Called as logits processor
     if student_logits is not None:
-        # TODO: this does not support use_task_rewards
         return compute_topk_loss(config, distillation_config, data, student_logits, data_format)
 
     # Called as final policy loss
