@@ -264,7 +264,7 @@ auto-fills it as `pool_size // per_replica_world_size`.
 
 ### `distillation.teacher_models.<name>.inference.*`
 
-Inference-engine config for this teacher (vLLM/SGLang); see [`RolloutConfig`](../../verl/workers/config/rollout.py). Same shape as
+Inference-engine config for this teacher; see [`RolloutConfig`](../../verl/workers/config/rollout.py). Same shape as
 `actor_rollout_ref.rollout.*`. Notable defaults inherited from the YAML:
 
 - `inference.name` — e.g. `vllm` or `sglang`.
@@ -275,7 +275,7 @@ Inference-engine config for this teacher (vLLM/SGLang); see [`RolloutConfig`](..
   `validate_and_prepare_for_distillation` raises.
 - `inference.engine_kwargs.vllm.max_logprobs` — auto-bumped to `≥
   distillation.distillation_loss.topk` whenever the active loss mode requires
-  top-k. (No-op for SGLang; `top_logprobs_num` is per-request there.)
+  top-k.
 
 `validate_and_prepare_for_distillation` rewrites
 `inference.prompt_length := prompt_length + response_length` and
@@ -291,8 +291,6 @@ Distillation divergence to use. Default: `"k3"`.
 Two registered families:
 
 - **Top-k** (`forward_kl_topk`): forward KL using the teacher's top-k logits.
-  Computed as a logits processor inline with the student's forward pass so the
-  full vocab logits don't need to leave the GPU.
 - **Single-sample KL estimators** (`kl`, `k1`, `abs`, `mse`, `k2`,
   `low_var_kl`, `k3`): per-token Monte Carlo estimators of reverse KL
   computed from the student's `log_probs` and the teacher's single
@@ -302,7 +300,7 @@ Two registered families:
 
 `k` for top-k distillation losses. Default: `32`.
 
-Only used when `loss_mode` requires top-k (e.g. `forward_kl_topk`). Drives both
+Only used when `loss_mode` requires top-$k$ (e.g. `forward_kl_topk`). Drives both
 the teacher's `prompt_logprobs` request size and (for vLLM) the engine's
 `max_logprobs` cap.
 
@@ -327,36 +325,24 @@ Default: `1.0`. Only takes effect when `use_task_rewards=true`.
 Per-token clamp on the distillation loss to `[-clamp, +clamp]`. Default:
 `null` (no clamp).
 
-Useful for `k1`, which can be negative, and to defang occasional
-exploding-token outliers. Example scripts override to `10.0`.
-
 ### `distillation.distillation_loss.log_prob_min_clamp` (float, optional)
 
 Lower clamp on log probabilities used inside divergence computations, to
 prevent `log q − log p` from blowing up when `p` or `q` are near zero.
-Default: `null`. Example scripts override to `-10.0`.
+Default: `null`.
 
 ### `distillation.distillation_loss.use_policy_gradient` (bool)
 
-How the distillation signal is applied. Default: `false`.
+How the distillation signal is applied. `true` corresponds to PG OPD, `false` to GKD OPD. Default: `false`.
 
-- `false` (supervised, [arxiv:2306.13649](https://arxiv.org/abs/2306.13649)):
-  per-token distillation loss is aggregated over the response mask and
-  backpropagated directly. Recommended with `loss_mode=k3` or
-  `forward_kl_topk`.
-- `true` (on-policy distillation,
-  [Thinking Machines blog](https://thinkingmachines.ai/blog/on-policy-distillation/)):
-  treat `−distillation_loss` as the advantage and run a PPO-style clipped
-  importance-sampling update against `data["old_log_probs"]`. Recommended
-  with `loss_mode=k1`.
 
 **Validation:**
 
-- `use_policy_gradient=False` + `loss_mode="k1"` → `ValueError`. The k1 loss
+- `use_policy_gradient=False` + `loss_mode="k1"` $\to$ `ValueError`. The k1 loss
   has no gradient through the teacher logprob, so backpropagating it directly
   is meaningless.
-- `use_policy_gradient=True` + `loss_mode="forward_kl_topk"` → warning. The
-  PG update only moves `∇log π(a)` for the sampled token, so the top-k
+- `use_policy_gradient=True` + `loss_mode="forward_kl_topk"` $\to$ warning. The
+  PG update only moves $\nabla_\theta\log\pi_\theta(y_t|s_t)$ for the sampled token $y_t$, so the top-$k$
   distributional signal is largely unused.
 
 ### `distillation.distillation_loss.policy_loss_mode` (str)
