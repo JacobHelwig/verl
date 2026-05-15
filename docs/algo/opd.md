@@ -373,23 +373,19 @@ worker before the loss runs.
 
 ## Usage
 
-Example scripts are available in `examples/on_policy_distillation_trainer`. This section shows the main configuration changes needed to adapt an existing PPO/GRPO script to OPD.
+Example scripts are available in `examples/on_policy_distillation_trainer`. This section shows how to configure different OPD recipes.
 
 ### Quick start
 
-For single-teacher OPD, first enable distillation and allocate a teacher resource pool:
+For single-teacher OPD, first enable distillation, allocate a teacher resource pool, and specify the teacher model and inference server settings:
 
 ```yaml
 distillation:
    enabled: true
+
    n_gpus_per_node: 2
    nnodes: 1
-```
 
-Then specify the teacher model and inference-server settings:
-
-```yaml
-distillation:
    teacher_models:
       teacher_model:
          model_path: Qwen/Qwen3-32B
@@ -398,7 +394,7 @@ distillation:
             gpu_memory_utilization: 0.8
 ```
 
-The teacher must share the student's tokenizer and vocabulary. This is usually true for models from the same family, such as a `Qwen3-8B` student and a `Qwen3-32B` teacher. Different LM-head padding is allowed, but the vocabularies must be compatible.
+The teacher must share the student's tokenizer and vocabulary. This is usually true for models from the same family, such as a `Qwen3-8B` student and a `Qwen3-32B` teacher. 
 
 In most OPD runs, disable the standard PPO/GRPO reference-policy KL. Otherwise, the student is simultaneously regularized toward the reference policy and distilled from the teacher:
 
@@ -412,7 +408,7 @@ algorithm:
 
 ### GKD OPD
 
-GKD OPD uses a top-$k$ partial-sum approximation to forward KL from the teacher to the student:
+For efficiency, the current implementation of GKD OPD uses a top-$k$ approximation to forward KL using the top-$k$ teacher logits and the forward KL:
 
 $$
 \mathcal{L}_{\mathrm{GKD}}^{(k)}(s_t)
@@ -423,12 +419,10 @@ $$
 \log \nu(v \mid s_t)
 -
 \log \pi_\theta(v \mid s_t)
-\bigr],
+\bigr].
 $$
 
-where $\nu$ is the teacher policy and $\pi_\theta$ is the student policy. The teacher and student probabilities here are the values from each model's full-vocabulary softmax, evaluated at the teacher's top-$k$ token IDs. Because the sum is taken over only $k$ tokens rather than the full vocabulary, the per-token loss can be negative when the student concentrates probability mass outside the teacher's top-$k$; the implementation clamps such per-token losses to $0$.
-
-As of May 14, 2026, GKD OPD is implemented only over the teacher top-$k$ logits. The current teacher server returns log-probabilities for the sampled token and the teacher top-$k$ tokens, but does not support gathering log-probabilities at arbitrary token IDs. Therefore, the implementation supports teacher-top-$k$ forward KL, but not student-top-$k$ reverse KL.
+The reason GKD OPD is implemented only over the teacher top-$k$ logits is because current inference servers return log-probabilities for the sampled token and the teacher top-$k$ tokens, but do not support gathering log-probabilities at arbitrary token IDs. Therefore, the implementation supports teacher-top-$k$ forward KL, but not student-top-$k$ reverse KL.
 
 To use GKD OPD, set `loss_mode=forward_kl_topk`, choose `topk`, and disable policy-gradient distillation:
 
@@ -467,44 +461,6 @@ distillation:
 
 Currently, only `policy_loss_mode=vanilla` is supported. Other policy-loss modes, such as `dppo_tv`, require additional parameters and are not implemented for OPD.
 
-The `k1` estimator is valid for reverse KL because sampled tokens are drawn from the student policy:
-
-$$
-\mathrm{KL}\!\left(\pi_\theta(\cdot \mid s_t) \,\Vert\, \nu(\cdot \mid s_t)\right)
-=
-\mathbb{E}_{y_t \sim \pi_\theta(\cdot \mid s_t)}
-\left[
-\log \pi_\theta(y_t \mid s_t)
--
-\log \nu(y_t \mid s_t)
-\right].
-$$
-
-Thus, a single student-sampled token gives the estimator
-
-$$
-\widehat{\mathrm{KL}}\!\left(\pi_\theta(\cdot \mid s_t) \,\Vert\, \nu(\cdot \mid s_t);\, y_t\right)
-=
-\log \pi_\theta(y_t \mid s_t)
--
-\log \nu(y_t \mid s_t).
-$$
-
-Estimating forward KL would require samples from the teacher distribution:
-
-$$
-\mathrm{KL}\!\left(\nu(\cdot \mid s_t) \,\Vert\, \pi_\theta(\cdot \mid s_t)\right)
-=
-\mathbb{E}_{y_t \sim \nu(\cdot \mid s_t)}
-\left[
-\log \nu(y_t \mid s_t)
--
-\log \pi_\theta(y_t \mid s_t)
-\right],
-$$
-
-which is closer to standard off-policy KD.
-
 ### Task rewards
 
 OPD can be optimized alone or combined with the standard PPO/GRPO task-reward loss.
@@ -531,7 +487,7 @@ distillation:
       distillation_loss_coef: 1.5
 ```
 
-When `use_task_rewards=false`, the PPO/GRPO task-reward loss is zeroed and the model optimizes only the distillation loss.
+When `use_task_rewards=false`, the PPO/GRPO task-reward loss is zeroed and the update optimizes only the distillation loss.
 
 ### Multi-teacher OPD
 
@@ -567,13 +523,7 @@ data:
    reward_fn_key: data_source
 ```
 
-In this example, the teacher pool has
-
-$$
-8 \times 2 = 16
-$$
-
-GPUs. Assuming `data_parallel_size=1` and `pipeline_model_parallel_size=1`, the teacher footprints are:
+In this example, the teacher pool has `8 * 2 = 16` GPUs. Assuming `data_parallel_size=1` and `pipeline_model_parallel_size=1`, the teacher footprints are:
 
 $$
 \text{gsm8k}: 2 \text{ replicas} \times 2 \text{ GPUs} = 4 \text{ GPUs}
@@ -587,15 +537,9 @@ so the total teacher footprint is $4 + 12 = 16$ GPUs, matching the resource pool
 
 Teacher replicas are assigned by linearly splitting the teacher resource pool into contiguous GPU bundles. Each individual replica must occupy the expected number of nodes implied by its `per_replica_world_size`:
 
-$$
-\texttt{per\_replica\_world\_size}
-=
-\texttt{tensor\_model\_parallel\_size}
-\times
-\texttt{data\_parallel\_size}
-\times
-\texttt{pipeline\_model\_parallel\_size}.
-$$
+```python
+per_replica_world_size = tensor_model_parallel_size * data_parallel_size * pipeline_model_parallel_size
+```
 
 With `n_gpus_per_node=8`, the example above aligns cleanly:
 
@@ -608,23 +552,23 @@ No replica crosses a node boundary unless its `per_replica_world_size` requires 
 
 A similar-looking configuration can fail if a replica's GPU bundle does not fall entirely within a single node. For example, with the same `n_gpus_per_node=8`, `nnodes=2` (pool size 16) but two teachers configured as
 
-- `a`: `tensor_model_parallel_size=3`, `num_replicas=2` → 6 GPUs total
-- `b`: `tensor_model_parallel_size=5`, `num_replicas=2` → 10 GPUs total
+- `a`: `tensor_model_parallel_size=3`, `num_replicas=2` $\to$ 6 GPUs total
+- `b`: `tensor_model_parallel_size=5`, `num_replicas=2` $\to$ 10 GPUs total
 
 the pool size still matches (`6 + 10 = 16`), but the linear bundle layout becomes
 
 ```text
-node 0: [a₀: 0,1,2] [a₁: 3,4,5] [b₀: 6,7,...
-node 1:                              ...,8,9,10] [b₁: 11,12,13,14,15]
+node 0: [a_0: 0,1,2] [a_1: 3,4,5] [b_0: 6,7,...
+node 1:                                     ...,8,9,10] [b_1: 11,12,13,14,15]
 ```
 
-Replica `b₀` spans bundles `[6, 11)` — straddling node 0 (bundles 6, 7) and node 1 (bundles 8, 9, 10). A 5-GPU replica with `n_gpus_per_node=8` is expected to fit on a single node (`ceil(5 / 8) = 1`), so `_validate_replica_node_alignment` raises. To fix it, adjust `num_replicas` and the per-teacher inference parallelism so every replica's bundle range falls entirely within one node — for instance, by choosing a `tensor_model_parallel_size` that divides `n_gpus_per_node` cleanly.
+Replica `b_0` spans bundles `[6, 11)` — straddling node 0 (bundles 6, 7) and node 1 (bundles 8, 9, 10). A 5-GPU replica with `n_gpus_per_node=8` is expected to fit on a single node (`ceil(5 / 8) = 1`), so `_validate_replica_node_alignment` raises. To fix it, adjust `num_replicas` and the per-teacher inference parallelism.
 
 #### Teacher routing
 
-The `teacher_key` controls routing. It must name a top-level field on each sample's `non_tensor_batch` (the lookup is `sample_kwargs[teacher_key]` in `AgentLoopWorker._compute_teacher_logprobs`). `data_source` is one such field, set by the dataset loader; it is *not* nested under `extra_info`. In the example above, `teacher_key=data_source`, so samples with `data_source="openai/gsm8k"` are routed to the `gsm8k` teacher, and samples with `data_source="hiyouga/geometry3k"` are routed to the `geo3k` teacher.
+The `teacher_key` controls routing. It must name a top-level field on each sample's `non_tensor_batch`. `data_source` is one such field, set by the dataset loader. In the example above, `teacher_key=data_source`, so samples with `data_source="openai/gsm8k"` are routed to the `gsm8k` teacher, and samples with `data_source="hiyouga/geometry3k"` are routed to the `geo3k` teacher.
 
-When routing by data source, enable data shuffling. Without shuffling, a concatenated dataset may activate only one teacher for long contiguous stretches. For example, if GSM8K examples are followed by Geo3K examples, then training will use only the GSM8K teacher for the first portion of the epoch and only the Geo3K teacher for the remaining portion.
+When routing by data source, enable data shuffling. Without shuffling, a dataset created by concatenating other datasets may activate only one teacher for long contiguous stretches. For example, if GSM8K examples are followed by Geo3K examples, then training will use only the GSM8K teacher for the first portion of the epoch and only the Geo3K teacher for the remaining portion.
 
 ## Metrics
 
@@ -636,10 +580,10 @@ OPD logs metrics under `actor/distillation/*`.
   Unscaled distillation loss. When `use_task_rewards=true`, compare this with `actor/pg_loss` to choose `distillation_loss_coef`.
 
 - `actor/distillation/abs_loss`  
-  Absolute value of the distillation loss. This is mainly useful for signed estimators such as `k1`, where the mean loss can be near zero even when individual token-level values are large.
+  Absolute value of the distillation loss. This is mainly useful for signed estimators such as `k1`, where divergences can be negative.
 
 - `actor/distillation/loss_min` / `actor/distillation/loss_max`  
-  Minimum and maximum per-token distillation loss in the batch. Use these to detect outlier tokens or numerical instability.
+  Minimum and maximum per-token distillation loss in the batch. 
 
 ### Top-$k$ metrics
 
@@ -657,13 +601,13 @@ These metrics are logged for top-$k$ loss modes such as `forward_kl_topk`.
 - `actor/distillation/teacher_mass_min` / `actor/distillation/teacher_mass_max`  
   Minimum and maximum teacher mass on the teacher top-$k$ tokens within the batch.
 
-`teacher_mass` indicates how much of the teacher distribution is covered by the selected top-$k$. Low `teacher_mass` means the top-$k$ approximation is truncating substantial teacher probability mass; increase `topk` if memory and runtime allow.
+`teacher_mass` indicates how much of the teacher distribution is covered by the selected top-$k$. Low `teacher_mass` means the top-$k$ approximation is truncating substantial teacher probability mass. This can happen either by selecting too small $k$, or due to unstable optimization leading to the student generating low probability sequences.
 
-`student_mass` indicates how much probability the student assigns to the teacher-preferred tokens. During successful distillation, `student_mass` should generally move toward `teacher_mass`. A sharp drop in `student_mass`, especially with rising `loss`, can indicate instability or a token-alignment issue.
+`student_mass` indicates how much probability the student assigns to the teacher-preferred tokens. 
 
 ## Debugging
 
-A useful technique for debugging modifications and additions to the distillation pipeline is to set the student to be the same model as the teacher. The loss should be approximately zero (not exact, since due to differences between train/inference engines). 
+A useful technique for debugging modifications and additions to the distillation pipeline is to set the student to be the same model as the teacher. The loss should be approximately zero (not exact, due to differences between train/inference engines). 
 
 ## Architecture
 
