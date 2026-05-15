@@ -447,9 +447,13 @@ Internal runtime fields. Do not set these manually.
 
 We have example scripts in the directory `examples/on_policy_distillation_trainer`. Now we show some basics for adapting a script to OPD.
 
+## Usage
+
+Example scripts are available in `examples/on_policy_distillation_trainer`. This section shows the main configuration changes needed to adapt an existing PPO/GRPO script to OPD.
+
 ### Quick start
 
-This shows the minimal setup for single teacher OPD. Enable distillation and specify resources for the teacher servers:
+For single-teacher OPD, first enable distillation and allocate a teacher resource pool:
 
 ```yaml
 distillation:
@@ -458,9 +462,7 @@ distillation:
    nnodes: 1
 ```
 
-Specify the teacher model name and server settings. 
-
-**NOTE**: the teacher model must have the same vocab as the student model, e.g., Qwen3-8B student and Qwen3-32B teacher. This is usually true if models are in the same family as each other. It can be verified by comparing tokenizers. Note that the model heads might have slightly different output dimensions due to padding, although this is not an issue. 
+Then specify the teacher model and inference-server settings:
 
 ```yaml
 distillation:
@@ -472,47 +474,58 @@ distillation:
             gpu_memory_utilization: 0.8
 ```
 
-Note that the reference policy in GRPO/PPO applies a reverse KL distillation loss to the student policy to distill it from the reference policy. In most cases, this should be disabled by ensuring that
+The teacher must share the student's tokenizer and vocabulary. This is usually true for models from the same family, such as a `Qwen3-8B` student and a `Qwen3-32B` teacher. Different LM-head padding is allowed, but the vocabularies must be compatible.
+
+In most OPD runs, disable the standard PPO/GRPO reference-policy KL. Otherwise, the student is simultaneously regularized toward the reference policy and distilled from the teacher:
 
 ```yaml
 actor_rollout_ref:
    actor:
       use_kl_loss: false
-algorithm: 
+algorithm:
    use_kl_in_reward: false
 ```
 
 ### GKD OPD
 
-As of May 14, 2026, the implementation only supports computing of the GKD OPD loss over the teacher top-\(k\) logits. Thus, the implemented objective is a top-\(k\) approximation to forward KL. Earlier implementations attempted reverse KL using the student top-\(k\) logits, but this was unstable for Qwen2.5-0.5B. Additionally, the current implementation does not allow for computing the student top-\(k\) logits because the teacher server does not allow for gathering at specified token IDs, only the sampled token and the top-\(k\) tokens.  
+GKD OPD uses a top-\(k\) approximation to forward KL from the teacher to the student:
 
-To use GKD OPD, set the loss mode, the top-\(k\) value, and disable policy gradient. 
+\[
+D_{\mathrm{KL}}^{(k)}(\nu \,\|\, \pi_\theta)(s_t)
+=
+\sum_{v \in \operatorname{TopK}(\nu(\cdot \mid s_t))}
+\tilde{\nu}(v \mid s_t)
+\log
+\frac{
+\tilde{\nu}(v \mid s_t)
+}{
+\tilde{\pi}_\theta(v \mid s_t)
+},
+\]
+
+where \(\nu\) is the teacher policy, \(\pi_\theta\) is the student policy, and the distributions are renormalized over the teacher top-\(k\) tokens.
+
+As of May 14, 2026, GKD OPD is implemented only over the teacher top-\(k\) logits. The current teacher server returns log-probabilities for the sampled token and the teacher top-\(k\) tokens, but does not support gathering log-probabilities at arbitrary token IDs. Therefore, the implementation supports teacher-top-\(k\) forward KL, but not student-top-\(k\) reverse KL.
+
+To use GKD OPD, set `loss_mode=forward_kl_topk`, choose `topk`, and disable policy-gradient distillation:
 
 ```yaml
 distillation:
-   distillation_loss: 
+   distillation_loss:
       loss_mode: forward_kl_topk
       topk: 128
       use_policy_gradient: false
 ```
 
-**Note**: It is also important to not use policy gradient, since policy gradient only directly influences increases/decreases the logprob of the sampled token to match the teacher logprob, whereas the top-\(k\) loss includes signal for at least \(k-1\) other tokens. Using policy gradient is therefore not only computationally wasteful, but also adds noise to the reward. For example, consider the case where the student has perfectly matched the logprob of the sampled token relative to the teacher, but for all other tokens in the top-\(k\), it has overestimated. The forward KL is therefore positive, so policy gradient will decrease the logprob of the sampled token, despite already matching.
+Do not use `forward_kl_topk` with `use_policy_gradient=true`. The top-\(k\) loss contains distributional information for many teacher-preferred tokens, but a policy-gradient update only acts through the sampled token:
 
+\[
+\nabla_\theta \mathcal{L}_{\mathrm{PG}}
+\propto
+- A_t \nabla_\theta \log \pi_\theta(y_t \mid s_t).
+\]
 
-**TODO: add a math eqn summarizing this**
-
-Put another way (rm this note after editting):
-
-```python
-        if self.use_policy_gradient and self.loss_mode == "forward_kl_topk":
-            print(
-                "WARNING: forward_kl_topk is most effective as a supervised distillation loss "
-                "(use_policy_gradient=False). With policy gradient, the update uses only the sampled"
-                " token's logprob ∇logπ(a), so the top-k distributional signal (how non-sampled logits "
-                "should move) is largely unused."
-            )
-
-```
+Thus, the update cannot directly assign credit to the non-sampled top-\(k\) tokens. This discards most of the distributional signal and can produce misleading updates. For example, if the student already matches the teacher on the sampled token but overestimates other teacher-top-\(k\) tokens, the forward KL is still positive; using it as a policy-gradient reward would incorrectly push on the sampled token.
 
 
 ### PG OPD
@@ -588,7 +601,7 @@ data:
    reward_fn_key: data_source
 ```
 
-**Note**: TODO: add a note about teacher GPU placement
+**Note**: TODO: add a note about teacher GPU placement. follow the function below to highlight how placement is done. rm the function code after this TODO is satisfied. Relate the explanation to the configuration snippet above by explaining why the snippet works and telling how it could be modified not to work anymore
 
 **Note**: The `teacher_key` is used to route examples to teachers and can be any string that is in the `extra_info` of each example. If examples are routed based on data source, i.e., `teacher_key == data_source`, make sure to shuffle the data. Otherwise, only one teacher will be active. For example, if the data is GSM8k concatenated with Geo3k, the first 8/11~73% of training will only use the GSM8k teacher, and the remaining 27% will use the Geo3k teacher.
 
