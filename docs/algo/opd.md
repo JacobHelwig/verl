@@ -612,14 +612,14 @@ When `use_task_rewards=false`, the PPO/GRPO task-reward loss is zeroed and the m
 
 ### Multi-teacher OPD
 
-Multiple teachers can be specified as
+Multiple teachers can be configured by adding one entry under `distillation.teacher_models` per teacher. Each teacher has a routing `key`, model path, replica count, and inference configuration.
 
 ```yaml
 distillation:
    n_gpus_per_node: 8
    nnodes: 2
    teacher_key: data_source
-   
+
    teacher_models:
       gsm8k:
          key: "openai/gsm8k"
@@ -634,7 +634,7 @@ distillation:
          key: "hiyouga/geometry3k"
          model_path: Qwen/Qwen3-VL-32B-Instruct
          num_replicas: 3
-         inference: 
+         inference:
             name: vllm
             tensor_model_parallel_size: 4
             gpu_memory_utilization: 0.8
@@ -644,64 +644,53 @@ data:
    reward_fn_key: data_source
 ```
 
-**Note**: TODO: add a note about teacher GPU placement. follow the function below to highlight how placement is done. rm the function code after this TODO is satisfied. Relate the explanation to the configuration snippet above by explaining why the snippet works and telling how it could be modified not to work anymore
+In this example, the teacher pool has
 
-```
-    def _validate_replica_node_alignment(self, replica_pools, per_replica_world_size, gpus_per_node):
-        """Verify that each replica occupies the expected number of nodes.
+\[
+8 \times 2 = 16
+\]
 
-        `per_replica_world_size` (W below) is the GPU count of a *single* inference
-        replica — the product of the replica's inference-time parallelism
-        (tensor_model_parallel_size * data_parallel_size * pipeline_model_parallel_size).
-        It is not the teacher's total GPU footprint (`num_replicas * W`).
+GPUs. Assuming `data_parallel_size=1` and `pipeline_model_parallel_size=1`, the teacher footprints are:
 
-        `split_resource_pool` walks bundles linearly and is oblivious to node
-        boundaries, so a replica's sub-pool can end up touching more nodes than W
-        implies when W does not divide the node layout cleanly.
+\[
+\text{gsm8k}: 2 \text{ replicas} \times 2 \text{ GPUs} = 4 \text{ GPUs}
+\]
 
-        Example (P = n_gpus_per_node = 4, two teachers with W=3 and W=4):
+\[
+\text{geo3k}: 3 \text{ replicas} \times 4 \text{ GPUs} = 12 \text{ GPUs}
+\]
 
-                node 0                  node 1
-                [0 1 2 3]               [4 5 6 7]         ← bundle idx
+so the total teacher footprint is \(4 + 12 = 16\) GPUs, matching the resource pool.
 
-            teacher A (W=3):
-                [A A A .]               [. . . .]          expected span 1, observed 1  ✓
-            teacher B (W=4):
-                [. . . B]               [B B B .]          expected span 1, observed 2  ✗
+Teacher replicas are assigned by linearly splitting the teacher resource pool into contiguous GPU bundles. Each individual replica must occupy the expected number of nodes implied by its `per_replica_world_size`:
 
-        Teacher B's one replica (W=4) is expected to stay on a single node, but the
-        linear split dropped it on bundles 3-6 — straddling nodes 0 and 1.
-        """
-        key = self.teacher_model_config.key
-        P = gpus_per_node
-        W = per_replica_world_size
-        expected_span = (W + P - 1) // P
-        for i, sub_pool in enumerate(replica_pools):
-            start = sub_pool.start_bundle_index
-            first_node = start // P
-            last_node = (start + W - 1) // P
-            observed_span = last_node - first_node + 1
-            if observed_span != expected_span:
-                raise ValueError(
-                    f"Teacher {key!r} replica {i} sub-pool bundles [{start}, {start + W}) "
-                    f"span {observed_span} node(s) but per_replica_world_size {W} with "
-                    f"n_gpus_per_node {P} expects {expected_span}. Reorder teachers or "
-                    f"adjust num_replicas / inference parallelism so each replica sub-pool "
-                    f"aligns to node boundaries."
-                )
+\[
+\texttt{per\_replica\_world\_size}
+=
+\texttt{tensor\_model\_parallel\_size}
+\times
+\texttt{data\_parallel\_size}
+\times
+\texttt{pipeline\_model\_parallel\_size}.
+\]
+
+With `n_gpus_per_node=8`, the example above aligns cleanly:
+
+```text
+node 0: [gsm8k replica 0: 2 GPUs] [gsm8k replica 1: 2 GPUs] [geo3k replica 0: 4 GPUs]
+node 1: [geo3k replica 1: 4 GPUs] [geo3k replica 2: 4 GPUs]
 ```
 
-**Note**: The `teacher_key` is used to route examples to teachers and can be any string that is in the `extra_info` of each example. If examples are routed based on data source, i.e., `teacher_key == data_source`, make sure to shuffle the data. Otherwise, only one teacher will be active. For example, if the data is GSM8k concatenated with Geo3k, the first 8/11~73% of training will only use the GSM8k teacher, and the remaining 27% will use the Geo3k teacher.
+No replica crosses a node boundary unless its `per_replica_world_size` requires multiple nodes.
 
+A similar-looking configuration can fail if the replica sizes do not align with node boundaries. For example, if `gsm8k.tensor_model_parallel_size` were changed from `2` to `3`, then `gsm8k` replicas would occupy bundles `[0, 3)`, `[3, 6)`, `[6, 9)`, and so on. The replica covering `[6, 9)` would straddle node 0 and node 1, even though a 3-GPU replica is expected to fit within one 8-GPU node. In that case, validation raises and asks you to reorder teachers or adjust `num_replicas` / inference parallelism.
 
+#### Teacher routing
 
-## Metrics
+The `teacher_key` controls routing. It must refer to a field in each sample's `extra_info`. In the example above, `teacher_key=data_source`, so samples with `data_source="openai/gsm8k"` are routed to the `gsm8k` teacher, and samples with `data_source="hiyouga/geometry3k"` are routed to the `geo3k` teacher.
 
-- `actor/distillation/abs_loss`: absolute value of distillation loss. Useful for k1 estimator, which can be negative.
-- `actor/distillation/loss_{min,max}`: min/max distillation loss in a batch.
-- `actor/distillation/loss`: Unscaled distillation loss. Compare the magnitude to `actor/pg_loss` when `use_task_rewards=True` to determine the value of `distillation_loss_coef`.
-- `actor/distillation/{student,teacher}_mass`: average sum of probabilities for the student/ teacher in the teacher top-\(k\) when using a top-\(k\) loss. Decreasing can indicate instability.
-- `actor/distillation/{student,teacher}_mass_{min,max}`: min/max sum of probabilities for the student/teacher in the teacher top-\(k\) when using a top-\(k\) loss. Decreasing can indicate instability.
+When routing by data source, enable data shuffling. Without shuffling, a concatenated dataset may activate only one teacher for long contiguous stretches. For example, if GSM8K examples are followed by Geo3K examples, then training will use only the GSM8K teacher for the first portion of the epoch and only the Geo3K teacher for the remaining portion.
+
 
 ## Debugging
 
